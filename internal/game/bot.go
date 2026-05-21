@@ -15,6 +15,18 @@ func (e *Engine) NextAutomaticBotID() string {
 			}
 		}
 	case PhaseTurns, PhaseFinalRound:
+		if !e.stackRankClaimed && e.openStackRank != 0 && e.StackWindowReadyForBots() {
+			for _, p := range e.Players {
+				if !p.IsBot {
+					continue
+				}
+				for s := 0; s < HandSize; s++ {
+					if c := p.Hand[s]; c != nil && c.Rank == e.openStackRank {
+						return p.ID
+					}
+				}
+			}
+		}
 		if len(e.Players) == 0 || e.CurrentTurn < 0 || e.CurrentTurn >= len(e.Players) {
 			return ""
 		}
@@ -47,6 +59,14 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		}
 		slot := slots[rand.IntN(len(slots))]
 		return Action{Type: ActionInitPeek, PlayerID: botID, Slot: slot}, true
+	}
+
+	if !e.stackRankClaimed && e.openStackRank != 0 && e.StackWindowReadyForBots() {
+		for s := 0; s < HandSize; s++ {
+			if c := bot.Hand[s]; c != nil && c.Rank == e.openStackRank {
+				return Action{Type: ActionSnapMatch, PlayerID: botID, Slot: s}, true
+			}
+		}
 	}
 
 	if e.PendingAbility != NoAbility {

@@ -47,13 +47,191 @@ function rankLabel(rank) {
     return RANK_LABELS[rank] || '?';
 }
 
+function parseRankFromCard(cardStr) {
+    if (!cardStr || cardStr === '🃏') return 14;
+    const m = cardStr.match(/^(10|[AKQJ2-9])/);
+    if (!m) return null;
+    const t = m[1];
+    if (t === 'A') return 1;
+    if (t === 'J') return 11;
+    if (t === 'Q') return 12;
+    if (t === 'K') return 13;
+    return parseInt(t, 10);
+}
+
+function slotRankForSnap(slotIdx, slotData) {
+    if (slotData?.rank != null) return slotData.rank;
+    if (slotData?.card) return parseRankFromCard(slotData.card);
+    const mem = getMemory(myPlayerId, slotIdx);
+    if (mem && mem.strength >= MEMORY_RECALL_MIN) return mem.rank;
+    return null;
+}
+
+function stackWindowOpen() {
+    return (
+        gameState &&
+        gameState.openStackRank > 0 &&
+        !gameState.stackRankClaimed &&
+        gameState.phase !== 'init_peek' &&
+        gameState.phase !== 'scoring'
+    );
+}
+
+function canSnapOwnCard(slotIdx, slotData) {
+    if (!stackWindowOpen()) return false;
+    if (pendingAbility && pendingAbility !== 'none' && gameState.currentTurn === myPlayerId) return false;
+    if (gameState.hasDrawnCard && gameState.currentTurn === myPlayerId) return false;
+    if (!slotData?.hasCard) return false;
+    const rank = slotRankForSnap(slotIdx, slotData);
+    return rank != null && rank === gameState.openStackRank;
+}
+
 function canStackOpponentCard(targetId, slotIdx) {
-    if (!gameState || gameState.phase === 'init_peek' || gameState.phase === 'scoring') return false;
-    if (gameState.currentTurn !== myPlayerId || gameState.hasDrawnCard) return false;
-    if (pendingAbility && pendingAbility !== 'none') return false;
+    if (!stackWindowOpen()) return false;
+    if (pendingAbility && pendingAbility !== 'none' && gameState.currentTurn === myPlayerId) return false;
+    if (gameState.hasDrawnCard && gameState.currentTurn === myPlayerId) return false;
     const mem = getMemory(targetId, slotIdx);
-    if (!mem || mem.strength < MEMORY_RECALL_MIN || gameState.topDiscardRank === undefined) return false;
-    return mem.rank === gameState.topDiscardRank;
+    if (!mem || mem.strength < MEMORY_RECALL_MIN) return false;
+    return mem.rank === gameState.openStackRank;
+}
+
+function cardIsRed(cardStr) {
+    return cardStr?.includes('♥') || cardStr?.includes('♦');
+}
+
+const CARD_FLIGHT = { holdMs: 650, flyMs: 1200 };
+
+function animateCardFlight(cardText, opts = {}) {
+    const layer = $('#cardFlyLayer');
+    if (!layer || !cardText) return;
+
+    const {
+        fromEl,
+        toEl = $('#discardPile'),
+        startFace = 0,
+        endFace = 180,
+        holdMs = CARD_FLIGHT.holdMs,
+        flyMs = CARD_FLIGHT.flyMs,
+        onComplete,
+    } = opts;
+
+    const fromR = fromEl?.getBoundingClientRect?.();
+    const toR = toEl?.getBoundingClientRect?.();
+    if (!fromR || !toR) return;
+
+    const w = Math.max(fromR.width, toR.width, 80);
+    const h = Math.max(fromR.height, toR.height, 112);
+    const startCx = fromR.left + fromR.width / 2;
+    const startCy = fromR.top + fromR.height / 2;
+    const endCx = toR.left + toR.width / 2;
+    const endCy = toR.top + toR.height / 2;
+    const dx = endCx - startCx;
+    const dy = endCy - startCy;
+    const isRed = cardIsRed(cardText);
+
+    const root = document.createElement('div');
+    root.className = 'card-flight-root';
+    root.style.left = `${startCx - w / 2}px`;
+    root.style.top = `${startCy - h / 2}px`;
+    root.style.width = `${w}px`;
+    root.style.height = `${h}px`;
+
+    root.innerHTML = `
+        <div class="card-flight-track">
+            <div class="card-flight-flip">
+                <div class="card-flight-face card-flight-front ${isRed ? 'red' : ''}">${escapeHtml(cardText)}</div>
+                <div class="card-flight-face card-flight-back"><span class="card-flight-back-label">CAMBIO</span></div>
+            </div>
+        </div>`;
+
+    const track = root.querySelector('.card-flight-track');
+    const flip = root.querySelector('.card-flight-flip');
+    flip.style.transform = `rotateY(${startFace}deg)`;
+
+    layer.appendChild(root);
+
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            root.classList.add('is-holding');
+            flip.style.transform = `rotateY(${startFace}deg) scale(1.14) translateZ(24px)`;
+        });
+    });
+
+    const flyTimer = setTimeout(() => {
+        root.classList.remove('is-holding');
+        root.classList.add('is-flying');
+
+        const easing = 'cubic-bezier(0.45, 0.02, 0.15, 1)';
+        track.style.transition = `transform ${flyMs}ms ${easing}`;
+        flip.style.transition = `transform ${flyMs}ms ${easing}`;
+
+        track.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+        flip.style.transform = `rotateY(${endFace}deg) scale(0.94) translateZ(0)`;
+    }, holdMs);
+
+    const doneTimer = setTimeout(() => {
+        root.classList.add('is-done');
+        setTimeout(() => {
+            root.remove();
+            onComplete?.();
+        }, 220);
+    }, holdMs + flyMs);
+
+    root._cancel = () => {
+        clearTimeout(flyTimer);
+        clearTimeout(doneTimer);
+        root.remove();
+    };
+}
+
+function flyCardToDiscard(cardText, opts = {}) {
+    animateCardFlight(cardText, {
+        fromEl: opts.fromEl,
+        toEl: $('#discardPile'),
+        startFace: 0,
+        endFace: 180,
+        ...opts,
+    });
+}
+
+function flyCardFromDeck(cardText, opts = {}) {
+    const area = $('#drawnCardArea');
+    if (area) area.classList.add('hidden');
+    animateCardFlight(cardText, {
+        fromEl: $('#deckPile'),
+        toEl: area || $('#drawnCardArea'),
+        startFace: 180,
+        endFace: 0,
+        onComplete: () => {
+            area?.classList.remove('hidden');
+        },
+        ...opts,
+    });
+}
+
+function flyCardFromDiscardToHand(cardText) {
+    const area = $('#drawnCardArea');
+    if (area) area.classList.add('hidden');
+    animateCardFlight(cardText, {
+        fromEl: $('#discardPile'),
+        toEl: area || $('#drawnCardArea'),
+        startFace: 0,
+        endFace: 0,
+        onComplete: () => area?.classList.remove('hidden'),
+    });
+}
+
+function flyCardToHand(cardText, fromEl, toEl) {
+    animateCardFlight(cardText, {
+        fromEl,
+        toEl: toEl || $('#playerHand'),
+        startFace: 0,
+        endFace: 360,
+    });
+}
+
+function layerHasActiveFlight() {
+    return !!$('#cardFlyLayer')?.querySelector('.card-flight-root:not(.is-done)');
 }
 
 function escapeHtml(s) {
@@ -358,18 +536,30 @@ function handleEvent(event) {
             toast(`Opponent card: ${evtData.card}`, true);
             break;
         case 'card_drawn':
+            if (evtPlayer === myPlayerId && evtData.card) {
+                if (evtData.source === 'discard') {
+                    flyCardFromDiscardToHand(evtData.card);
+                } else {
+                    flyCardFromDeck(evtData.card);
+                }
+            }
             toast(evtData.source === 'deck' ? 'Drew from deck' : `Drew ${evtData.card}`, false);
-            break;
-        case 'card_swapped':
-            toast(`${getPlayerName(evtPlayer)} swapped a card`);
             break;
         case 'card_discarded':
             toast(
                 `Discarded ${evtData.card}` + (evtData.ability !== 'none' ? ` → ${formatAbility(evtData.ability)}` : ''),
             );
+            flyCardToDiscard(evtData.card, {
+                fromEl: evtPlayer === myPlayerId ? $('#drawnCardArea') : $('.table-center'),
+            });
             break;
         case 'card_returned':
             toast(`Returned ${evtData.card} to discard`, false);
+            flyCardToDiscard(evtData.card, { fromEl: $('#drawnCardArea') });
+            break;
+        case 'card_swapped':
+            toast(`${getPlayerName(evtPlayer)} swapped a card`);
+            if (evtData.discarded) flyCardToDiscard(evtData.discarded, { fromEl: $('#playerHand') });
             break;
         case 'blind_switched':
             toast(`${getPlayerName(evtPlayer)} blind switched`);
@@ -390,12 +580,25 @@ function handleEvent(event) {
             break;
         case 'snap_success':
             toast(`${getPlayerName(evtPlayer)} stacked ${evtData.card}!`, true);
+            flyCardToDiscard(evtData.card, {
+                fromEl:
+                    evtPlayer === myPlayerId && evtData.slot != null
+                        ? $(`#playerHand .card[data-slot="${evtData.slot}"]`)
+                        : $(`.seat[data-player="${evtPlayer}"]`) || $('#playerHand'),
+            });
+            break;
+        case 'snap_voided':
+            toast(evtData.message || 'Stack voided — someone beat you to it.');
             break;
         case 'snap_failed':
             toast(evtData.message);
             break;
         case 'stack_opponent_success':
             toast(`Stacked opponent's ${evtData.card}!`, true);
+            flyCardToDiscard(evtData.card, { fromEl: $('.table-felt') });
+            break;
+        case 'stack_opponent_voided':
+            toast(evtData.message || 'Opponent stack voided.');
             break;
         case 'stack_opponent_failed':
             toast(evtData.message);
@@ -463,6 +666,11 @@ function canReturnDrawnCard() {
 
 function returnDrawnCard() {
     if (!canReturnDrawnCard()) return;
+    const dc = gameState?.drawnCard;
+    if (dc?.card) {
+        $('#drawnCardArea')?.classList.add('hidden');
+        flyCardToDiscard(dc.card, { fromEl: $('#drawnCardArea'), holdMs: 500 });
+    }
     sendAction('return_card');
 }
 
@@ -522,6 +730,10 @@ function renderGame(dealAnim = false) {
     } else if (isMyTurn) {
         turnEl.textContent = 'Your turn';
         turnEl.classList.add('my-turn');
+    } else if (stackWindowOpen()) {
+        const rank = rankLabel(gameState.openStackRank);
+        turnEl.textContent = `Stack open — match ${rank} (double-click your card)`;
+        turnEl.classList.add('my-turn');
     } else {
         const name = getPlayerName(gameState.currentTurn);
         turnEl.textContent = name ? `${name}'s turn` : '';
@@ -570,11 +782,13 @@ function renderDrawnCard(isMyTurn, anim) {
     const playBtn = $('#drawnPlayBtn');
 
     if (gameState.drawnCard && isMyTurn) {
-        area.classList.remove('hidden');
+        const animatingDraw = layerHasActiveFlight();
+        area.classList.toggle('hidden', animatingDraw);
         const dc = gameState.drawnCard;
         const isRed = dc.card.includes('♥') || dc.card.includes('♦');
         const display = area.querySelector('.drawn-card-display');
-        display.className = `drawn-card-display ${isRed ? 'red' : ''} ${anim ? 'card-animate-draw' : 'card-animate-in'}`;
+        const animatingDraw = layerHasActiveFlight();
+        display.className = `drawn-card-display ${isRed ? 'red' : ''} ${animatingDraw ? 'card-reveal-pending' : anim ? 'card-animate-draw' : 'card-animate-in'}`;
         display.draggable = true;
         $('#drawnCardValue').textContent = `${dc.card} · ${dc.points}`;
 
@@ -605,6 +819,7 @@ function renderSeats(dealAnim) {
         const isActive = opp.id === gameState.currentTurn;
         const seat = document.createElement('div');
         seat.className = 'seat' + (isActive ? ' active-turn' : '') + (opp.calledCambio ? ' cambio' : '');
+        seat.dataset.player = opp.id;
         seat.style.left = `${pos.x}%`;
         seat.style.top = `${pos.y}%`;
 
@@ -682,15 +897,22 @@ function renderPlayerHand(dealAnim) {
                 card.classList.add('init-peek-hint');
             }
         }
+        if (canSnapOwnCard(i, slot)) {
+            card.classList.add('stackable-own');
+            card.title = 'Double-click to stack on discard';
+        }
         if (i === selectedSlot) card.classList.add('selected');
 
         card.dataset.slot = String(i);
         card.addEventListener('click', () => handleOwnCardClick(i));
         card.addEventListener('dblclick', (ev) => {
             ev.preventDefault();
-            if (phase !== 'turns' && phase !== 'final_round') return;
-            if (gameState.currentTurn !== myPlayerId || gameState.hasDrawnCard) return;
+            if (!stackWindowOpen()) return;
+            if (pendingAbility && pendingAbility !== 'none' && gameState.currentTurn === myPlayerId) return;
+            if (gameState.hasDrawnCard && gameState.currentTurn === myPlayerId) return;
             if (!slot.hasCard) return;
+            const label = slot.card || rankLabel(slotRankForSnap(i, slot)) || '?';
+            flyCardToDiscard(label, { fromEl: card });
             sendAction('snap', { slot: i });
         });
         container.appendChild(card);

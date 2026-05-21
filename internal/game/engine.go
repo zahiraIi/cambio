@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // ErrPlayerAlreadyInGame is returned when joining with an ID already seated.
@@ -78,6 +79,11 @@ type Engine struct {
 
 	// peekKnowledge[viewer][target:slot] = remembered card with decaying strength
 	peekKnowledge map[string]map[string]memoryEntry
+
+	// Stack race: when a player discards/swaps to discard, others may snap matching rank once.
+	openStackRank         Rank
+	stackRankClaimed      bool
+	stackWindowOpenedAtMs int64
 }
 
 type memoryEntry struct {
@@ -388,6 +394,7 @@ func (e *Engine) handleSwapCard(a Action) error {
 	})
 
 	e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	e.openStackWindow(old.Rank)
 	e.advanceTurn()
 	return nil
 }
@@ -409,6 +416,7 @@ func (e *Engine) handleDiscard(a Action) error {
 		Type: "card_discarded", PlayerID: a.PlayerID,
 		Data: map[string]interface{}{"card": discarded.String(), "ability": abilityName(ability)},
 	})
+	e.openStackWindow(discarded.Rank)
 
 	if ability != NoAbility {
 		e.PendingAbility = ability
@@ -451,6 +459,7 @@ func (e *Engine) handleReturnDrawn(a Action) error {
 		Type: "card_returned", PlayerID: a.PlayerID,
 		Data: map[string]interface{}{"card": returned.String()},
 	})
+	e.openStackWindow(returned.Rank)
 	e.advanceTurn()
 	return nil
 }
@@ -676,25 +685,35 @@ func (e *Engine) handleSnapMatch(a Action) error {
 	if e.Phase != PhaseTurns && e.Phase != PhaseFinalRound {
 		return fmt.Errorf("cannot snap now")
 	}
-	if e.DrawnCard != nil {
+	if e.DrawnCard != nil && e.Players[e.CurrentTurn].ID == a.PlayerID {
 		return fmt.Errorf("finish your draw action first")
 	}
-	if err := e.rejectIfPendingAbility(); err != nil {
+	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
 		return err
 	}
-	if len(e.DiscardPile) == 0 {
-		return fmt.Errorf("no card on discard pile")
+	if e.openStackRank == 0 {
+		e.emit(Event{
+			Type: "snap_voided", PlayerID: a.PlayerID,
+			Data: map[string]string{"message": "Nothing to stack right now."},
+		})
+		return nil
+	}
+	if e.stackRankClaimed {
+		e.emit(Event{
+			Type: "snap_voided", PlayerID: a.PlayerID,
+			Data: map[string]string{"message": "Someone already stacked that discard."},
+		})
+		return nil
 	}
 	player := e.findPlayer(a.PlayerID)
 	if player == nil {
 		return fmt.Errorf("player not found")
 	}
-	topDiscard := e.DiscardPile[len(e.DiscardPile)-1]
 	handCard := player.Hand[a.Slot]
 	if handCard == nil {
 		return fmt.Errorf("no card in that slot")
 	}
-	if handCard.Rank != topDiscard.Rank {
+	if handCard.Rank != e.openStackRank {
 		e.applyPenaltyCard(player)
 		e.emit(Event{
 			Type: "snap_failed", PlayerID: a.PlayerID,
@@ -707,6 +726,7 @@ func (e *Engine) handleSnapMatch(a Action) error {
 	player.Hand[a.Slot] = nil
 	player.Known[a.Slot] = false
 	e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	e.stackRankClaimed = true
 	e.emit(Event{
 		Type: "snap_success", PlayerID: a.PlayerID,
 		Data: map[string]interface{}{"slot": a.Slot, "card": handCard.String()},
@@ -718,17 +738,25 @@ func (e *Engine) handleStackOpponent(a Action) error {
 	if e.Phase != PhaseTurns && e.Phase != PhaseFinalRound {
 		return fmt.Errorf("cannot stack opponent now")
 	}
-	if err := e.validateTurn(a.PlayerID); err != nil {
-		return err
-	}
-	if e.DrawnCard != nil {
+	if e.DrawnCard != nil && e.Players[e.CurrentTurn].ID == a.PlayerID {
 		return fmt.Errorf("finish your draw action first")
 	}
-	if err := e.rejectIfPendingAbility(); err != nil {
+	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
 		return err
 	}
-	if len(e.DiscardPile) == 0 {
-		return fmt.Errorf("no card on discard pile")
+	if e.openStackRank == 0 {
+		e.emit(Event{
+			Type: "stack_opponent_voided", PlayerID: a.PlayerID,
+			Data: map[string]string{"message": "Nothing to stack right now."},
+		})
+		return nil
+	}
+	if e.stackRankClaimed {
+		e.emit(Event{
+			Type: "stack_opponent_voided", PlayerID: a.PlayerID,
+			Data: map[string]string{"message": "Someone already stacked that discard."},
+		})
+		return nil
 	}
 	actor := e.findPlayer(a.PlayerID)
 	target := e.findPlayer(a.TargetID)
@@ -739,11 +767,10 @@ func (e *Engine) handleStackOpponent(a Action) error {
 		return fmt.Errorf("invalid target slot")
 	}
 
-	topDiscard := e.DiscardPile[len(e.DiscardPile)-1]
 	actualCard := target.Hand[a.TargetSlot]
 	memRank, memStrength, hadMemory := e.getPeekKnowledge(a.PlayerID, a.TargetID, a.TargetSlot)
 
-	if !hadMemory || memStrength < 0.35 || memRank != actualCard.Rank || actualCard.Rank != topDiscard.Rank {
+	if !hadMemory || memStrength < 0.35 || memRank != actualCard.Rank || actualCard.Rank != e.openStackRank {
 		e.applyPenaltyCard(actor)
 		e.emit(Event{
 			Type: "stack_opponent_failed", PlayerID: a.PlayerID,
@@ -757,6 +784,7 @@ func (e *Engine) handleStackOpponent(a Action) error {
 	target.Hand[a.TargetSlot] = nil
 	target.Known[a.TargetSlot] = false
 	e.invalidateKnowledgeForSlot(a.TargetID, a.TargetSlot)
+	e.stackRankClaimed = true
 
 	e.emit(Event{
 		Type: "stack_opponent_success", PlayerID: a.PlayerID,
@@ -793,6 +821,7 @@ func (e *Engine) GetState(forPlayerID string) map[string]interface{} {
 			if p.ID == forPlayerID && p.Known[j] && p.Hand[j] != nil {
 				slot["card"] = p.Hand[j].String()
 				slot["points"] = p.Hand[j].Points()
+				slot["rank"] = int(p.Hand[j].Rank)
 				slot["known"] = true
 			}
 			hand[j] = slot
@@ -829,6 +858,8 @@ func (e *Engine) GetState(forPlayerID string) map[string]interface{} {
 		state["topDiscard"] = top.String()
 		state["topDiscardRank"] = int(top.Rank)
 	}
+	state["openStackRank"] = int(e.openStackRank)
+	state["stackRankClaimed"] = e.stackRankClaimed
 
 	if forPlayerID != "" {
 		state["initPeeksLeft"] = initPeeksRemaining(e.InitPeekMask[forPlayerID])
@@ -1052,6 +1083,36 @@ func (e *Engine) rejectIfPendingAbility() error {
 		return fmt.Errorf("resolve your card ability first")
 	}
 	return nil
+}
+
+func (e *Engine) rejectIfPendingAbilityFor(playerID string) error {
+	if e.PendingAbility == NoAbility {
+		return nil
+	}
+	if len(e.Players) > 0 && e.CurrentTurn < len(e.Players) && e.Players[e.CurrentTurn].ID == playerID {
+		return fmt.Errorf("resolve your card ability first")
+	}
+	return nil
+}
+
+func (e *Engine) openStackWindow(rank Rank) {
+	e.openStackRank = rank
+	e.stackRankClaimed = false
+	e.stackWindowOpenedAtMs = time.Now().UnixMilli()
+}
+
+func (e *Engine) clearStackWindow() {
+	e.openStackRank = 0
+	e.stackRankClaimed = false
+	e.stackWindowOpenedAtMs = 0
+}
+
+// StackWindowReadyForBots returns true once humans had a brief window to react first.
+func (e *Engine) StackWindowReadyForBots() bool {
+	if e.openStackRank == 0 || e.stackWindowOpenedAtMs == 0 {
+		return false
+	}
+	return time.Now().UnixMilli()-e.stackWindowOpenedAtMs >= 1400
 }
 
 func (e *Engine) findPlayer(id string) *Player {
