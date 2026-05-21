@@ -38,6 +38,7 @@ const (
 	ActionInitPeek                        // peek at starting cards
 	ActionSnapMatch                       // snap matching cards to discard pile
 	ActionStackOpponent                   // stack opponent card matching discard (requires prior peek memory)
+	ActionStackGive                       // give one of your cards after a successful opponent stack
 )
 
 type Action struct {
@@ -84,6 +85,11 @@ type Engine struct {
 	openStackRank         Rank
 	stackRankClaimed      bool
 	stackWindowOpenedAtMs int64
+
+	// After a successful opponent stack, the actor must give one of their cards to the target slot.
+	pendingStackGiveActor     string
+	pendingStackGiveTargetID  string
+	pendingStackGiveTargetSlot int
 }
 
 type memoryEntry struct {
@@ -174,6 +180,58 @@ func (e *Engine) RemovePlayer(id string) error {
 	return fmt.Errorf("player not found")
 }
 
+// ForceSkipStackGive auto-completes a stuck opponent stack give (bot fallback).
+func (e *Engine) ForceSkipStackGive() []Event {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pendingStackGiveActor == "" {
+		return nil
+	}
+	actor := e.findPlayer(e.pendingStackGiveActor)
+	target := e.findPlayer(e.pendingStackGiveTargetID)
+	if actor == nil || target == nil {
+		e.pendingStackGiveActor = ""
+		e.pendingStackGiveTargetID = ""
+		e.pendingStackGiveTargetSlot = -1
+		return nil
+	}
+	ts := e.pendingStackGiveTargetSlot
+	var giveSlot int = -1
+	for s := 0; s < HandSize; s++ {
+		if actor.Hand[s] != nil {
+			giveSlot = s
+			break
+		}
+	}
+	if giveSlot < 0 || ts < 0 || ts >= HandSize || target.Hand[ts] != nil {
+		e.pendingStackGiveActor = ""
+		e.pendingStackGiveTargetID = ""
+		e.pendingStackGiveTargetSlot = -1
+		return nil
+	}
+	start := len(e.Events)
+	given := *actor.Hand[giveSlot]
+	e.invalidateKnowledgeForSlot(e.pendingStackGiveActor, giveSlot)
+	actor.Hand[giveSlot] = nil
+	actor.Known[giveSlot] = false
+	target.Hand[ts] = &given
+	target.Known[ts] = false
+	e.recordPeekKnowledge(e.pendingStackGiveActor, e.pendingStackGiveTargetID, ts, given.Rank)
+	e.pendingStackGiveActor = ""
+	e.pendingStackGiveTargetID = ""
+	e.pendingStackGiveTargetSlot = -1
+	e.emit(Event{
+		Type: "stack_give_complete", PlayerID: actor.ID,
+		Data: map[string]interface{}{
+			"mySlot": giveSlot, "targetPlayer": target.ID, "targetSlot": ts, "auto": true,
+		},
+	})
+	newEvents := make([]Event, len(e.Events)-start)
+	copy(newEvents, e.Events[start:])
+	e.Events = e.Events[:0]
+	return newEvents
+}
+
 // ForceSkipAbility clears a stuck pending ability and advances turn (bot fallback).
 func (e *Engine) ForceSkipAbility() []Event {
 	e.mu.Lock()
@@ -260,6 +318,8 @@ func (e *Engine) Execute(action Action) ([]Event, error) {
 		err = e.handleSnapMatch(action)
 	case ActionStackOpponent:
 		err = e.handleStackOpponent(action)
+	case ActionStackGive:
+		err = e.handleStackGive(action)
 	default:
 		err = fmt.Errorf("unknown action type")
 	}
@@ -329,6 +389,9 @@ func (e *Engine) handleDrawDeck(a Action) error {
 	if err := e.rejectIfPendingAbility(); err != nil {
 		return err
 	}
+	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
+		return err
+	}
 	if e.DrawnCard != nil {
 		return fmt.Errorf("already holding a drawn card")
 	}
@@ -354,6 +417,9 @@ func (e *Engine) handleDrawDiscard(a Action) error {
 		return err
 	}
 	if err := e.rejectIfPendingAbility(); err != nil {
+		return err
+	}
+	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
 		return err
 	}
 	if e.DrawnCard != nil {
@@ -666,6 +732,9 @@ func (e *Engine) handleCallCambio(a Action) error {
 	if err := e.rejectIfPendingAbility(); err != nil {
 		return err
 	}
+	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
+		return err
+	}
 	player := e.findPlayer(a.PlayerID)
 	player.CalledCambio = true
 	e.CambioCallerIdx = e.CurrentTurn
@@ -689,6 +758,9 @@ func (e *Engine) handleSnapMatch(a Action) error {
 		return fmt.Errorf("finish your draw action first")
 	}
 	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
+		return err
+	}
+	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
 		return err
 	}
 	if e.openStackRank == 0 {
@@ -744,6 +816,9 @@ func (e *Engine) handleStackOpponent(a Action) error {
 	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
 		return err
 	}
+	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
+		return err
+	}
 	if e.openStackRank == 0 {
 		e.emit(Event{
 			Type: "stack_opponent_voided", PlayerID: a.PlayerID,
@@ -785,11 +860,59 @@ func (e *Engine) handleStackOpponent(a Action) error {
 	target.Known[a.TargetSlot] = false
 	e.invalidateKnowledgeForSlot(a.TargetID, a.TargetSlot)
 	e.stackRankClaimed = true
+	e.pendingStackGiveActor = a.PlayerID
+	e.pendingStackGiveTargetID = a.TargetID
+	e.pendingStackGiveTargetSlot = a.TargetSlot
 
 	e.emit(Event{
 		Type: "stack_opponent_success", PlayerID: a.PlayerID,
 		Data: map[string]interface{}{
 			"targetPlayer": a.TargetID, "targetSlot": a.TargetSlot, "card": discarded.String(),
+			"needsGive": true,
+		},
+	})
+	return nil
+}
+
+func (e *Engine) handleStackGive(a Action) error {
+	if e.pendingStackGiveActor == "" {
+		return fmt.Errorf("no card to give after stack")
+	}
+	if a.PlayerID != e.pendingStackGiveActor {
+		return fmt.Errorf("not your stack give")
+	}
+	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
+		return err
+	}
+	actor := e.findPlayer(a.PlayerID)
+	target := e.findPlayer(e.pendingStackGiveTargetID)
+	if actor == nil || target == nil {
+		return fmt.Errorf("player not found")
+	}
+	if a.Slot < 0 || a.Slot >= HandSize || actor.Hand[a.Slot] == nil {
+		return fmt.Errorf("invalid card slot")
+	}
+	ts := e.pendingStackGiveTargetSlot
+	if ts < 0 || ts >= HandSize || target.Hand[ts] != nil {
+		return fmt.Errorf("invalid target slot")
+	}
+
+	given := *actor.Hand[a.Slot]
+	e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	actor.Hand[a.Slot] = nil
+	actor.Known[a.Slot] = false
+	target.Hand[ts] = &given
+	target.Known[ts] = false
+	e.recordPeekKnowledge(a.PlayerID, e.pendingStackGiveTargetID, ts, given.Rank)
+
+	e.pendingStackGiveActor = ""
+	e.pendingStackGiveTargetID = ""
+	e.pendingStackGiveTargetSlot = -1
+
+	e.emit(Event{
+		Type: "stack_give_complete", PlayerID: a.PlayerID,
+		Data: map[string]interface{}{
+			"mySlot": a.Slot, "targetPlayer": target.ID, "targetSlot": ts,
 		},
 	})
 	return nil
@@ -860,6 +983,13 @@ func (e *Engine) GetState(forPlayerID string) map[string]interface{} {
 	}
 	state["openStackRank"] = int(e.openStackRank)
 	state["stackRankClaimed"] = e.stackRankClaimed
+
+	if forPlayerID != "" && e.pendingStackGiveActor == forPlayerID {
+		state["pendingStackGive"] = map[string]interface{}{
+			"targetId":   e.pendingStackGiveTargetID,
+			"targetSlot": e.pendingStackGiveTargetSlot,
+		}
+	}
 
 	if forPlayerID != "" {
 		state["initPeeksLeft"] = initPeeksRemaining(e.InitPeekMask[forPlayerID])
@@ -1091,6 +1221,16 @@ func (e *Engine) rejectIfPendingAbilityFor(playerID string) error {
 	}
 	if len(e.Players) > 0 && e.CurrentTurn < len(e.Players) && e.Players[e.CurrentTurn].ID == playerID {
 		return fmt.Errorf("resolve your card ability first")
+	}
+	return nil
+}
+
+func (e *Engine) rejectIfPendingStackGive(playerID string) error {
+	if e.pendingStackGiveActor == "" {
+		return nil
+	}
+	if e.pendingStackGiveActor == playerID {
+		return fmt.Errorf("pick a card to give your opponent")
 	}
 	return nil
 }

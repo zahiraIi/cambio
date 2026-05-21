@@ -137,11 +137,15 @@
         </div>
 
         <!-- Scores -->
-        <div id="scores" class="screen">
-            <div class="lobby-card">
-                <h2>Hand complete</h2>
+        <div id="scores" class="screen scores-screen">
+            <div class="scores-center">
+                <div id="winnerAnnounce" class="winner-announce">
+                    <p class="winner-label">Winner</p>
+                    <h2 id="winnerName" class="winner-name"></h2>
+                    <p id="winnerScore" class="winner-score"></p>
+                </div>
                 <div id="scoreBoard" class="score-board"></div>
-                <button type="button" class="btn btn-primary" onclick="location.href='/'">Play again</button>
+                <button type="button" class="btn btn-primary scores-play-again" onclick="location.href='/'">Play again</button>
             </div>
         </div>
     </div>

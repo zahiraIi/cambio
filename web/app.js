@@ -78,6 +78,7 @@ function stackWindowOpen() {
 }
 
 function canSnapOwnCard(slotIdx, slotData) {
+    if (gameState?.pendingStackGive) return false;
     if (!stackWindowOpen()) return false;
     if (pendingAbility && pendingAbility !== 'none' && gameState.currentTurn === myPlayerId) return false;
     if (gameState.hasDrawnCard && gameState.currentTurn === myPlayerId) return false;
@@ -87,6 +88,7 @@ function canSnapOwnCard(slotIdx, slotData) {
 }
 
 function canStackOpponentCard(targetId, slotIdx) {
+    if (gameState?.pendingStackGive) return false;
     if (!stackWindowOpen()) return false;
     if (pendingAbility && pendingAbility !== 'none' && gameState.currentTurn === myPlayerId) return false;
     if (gameState.hasDrawnCard && gameState.currentTurn === myPlayerId) return false;
@@ -576,7 +578,7 @@ function handleEvent(event) {
             syncAbilityPromptFromState();
             break;
         case 'cambio_called':
-            toast(`${evtData.message} — one final round for everyone else.`, true);
+            toast(`${evtData.message} — one final turn for each other player.`, true);
             break;
         case 'snap_success':
             toast(`${getPlayerName(evtPlayer)} stacked ${evtData.card}!`, true);
@@ -594,8 +596,11 @@ function handleEvent(event) {
             toast(evtData.message);
             break;
         case 'stack_opponent_success':
-            toast(`Stacked opponent's ${evtData.card}!`, true);
+            toast(`Stacked opponent's ${evtData.card}! Pick a card to give them.`, true);
             flyCardToDiscard(evtData.card, { fromEl: $('.table-felt') });
+            break;
+        case 'stack_give_complete':
+            toast('Card given to opponent.', true);
             break;
         case 'stack_opponent_voided':
             toast(evtData.message || 'Opponent stack voided.');
@@ -605,6 +610,13 @@ function handleEvent(event) {
             break;
         case 'game_over':
             toast('Hand complete!', true);
+            if (evtData && typeof evtData === 'object' && !Array.isArray(evtData)) {
+                if (gameState) gameState = { ...gameState, phase: 'scoring', scores: evtData };
+                clearSession();
+                showScores(evtData);
+            } else {
+                checkGameOver();
+            }
             break;
         case 'turns_begin':
             toast('Main round — lowest score wins. Call CAMBIO when you think you have the best hand.', true);
@@ -627,7 +639,17 @@ function syncAbilityPromptFromState() {
     const phase = gameState.phase;
     const isMyTurn = gameState.currentTurn === myPlayerId;
     const pa = gameState.pendingAbility;
+    const psg = gameState.pendingStackGive;
     const prompt = $('#abilityPrompt');
+
+    if (psg) {
+        const opp = gameState.players.find((p) => p.id === psg.targetId);
+        pendingAbility = null;
+        prompt?.classList.remove('hidden');
+        $('#abilityText').textContent = `Pick one of your cards to give ${opp?.name || 'your opponent'}`;
+        $('#abilitySkipBtn')?.classList.add('hidden');
+        return;
+    }
 
     if (isMyTurn && pa && pa !== 'none' && phase !== 'init_peek' && phase !== 'scoring') {
         pendingAbility = pa;
@@ -727,6 +749,13 @@ function renderGame(dealAnim = false) {
         const left = gameState.initPeeksLeft ?? 2;
         turnEl.textContent = left > 0 ? `Peek your first two cards (${left} left)` : 'Waiting for others…';
         turnEl.classList.toggle('my-turn', left > 0);
+    } else if (phase === 'final_round' && isMyTurn) {
+        turnEl.textContent = 'Final round — your last turn';
+        turnEl.classList.add('my-turn');
+    } else if (phase === 'final_round') {
+        const name = getPlayerName(gameState.currentTurn);
+        turnEl.textContent = name ? `Final round — ${name}'s turn` : 'Final round';
+        turnEl.classList.remove('my-turn');
     } else if (isMyTurn) {
         turnEl.textContent = 'Your turn';
         turnEl.classList.add('my-turn');
@@ -750,7 +779,7 @@ function renderGame(dealAnim = false) {
     const canAct = isMyTurn && phase !== 'init_peek' && phase !== 'scoring';
     $('#drawDeckBtn').disabled = !canAct || hasDrawn;
     $('#drawDiscardBtn').disabled = !canAct || hasDrawn;
-    const canCambio = canAct && !hasDrawn && phase === 'turns';
+    const canCambio = canAct && !hasDrawn && phase === 'turns' && !gameState.pendingStackGive;
     $('#cambioBtn').disabled = !canCambio;
 
     $('#deckPile').onclick = canAct && !hasDrawn ? () => sendAction('draw_deck') : null;
@@ -787,7 +816,6 @@ function renderDrawnCard(isMyTurn, anim) {
         const dc = gameState.drawnCard;
         const isRed = dc.card.includes('♥') || dc.card.includes('♦');
         const display = area.querySelector('.drawn-card-display');
-        const animatingDraw = layerHasActiveFlight();
         display.className = `drawn-card-display ${isRed ? 'red' : ''} ${animatingDraw ? 'card-reveal-pending' : anim ? 'card-animate-draw' : 'card-animate-in'}`;
         display.draggable = true;
         $('#drawnCardValue').textContent = `${dc.card} · ${dc.points}`;
@@ -827,7 +855,7 @@ function renderSeats(dealAnim) {
         let handHtml = '';
         opp.hand.forEach((slot, i) => {
             if (!slot.hasCard) {
-                handHtml += '<div class="card card-small" style="visibility:hidden"></div>';
+                handHtml += '<div class="card" style="visibility:hidden"></div>';
                 return;
             }
             const abilityClick =
@@ -835,7 +863,7 @@ function renderSeats(dealAnim) {
                 pendingAbility === 'blind_switch' ||
                 pendingAbility === 'look_and_switch';
             const stackHere = canStackOpponentCard(opp.id, i);
-            let cls = 'card card-back card-small';
+            let cls = 'card card-back';
             if (abilityClick) cls += ' clickable';
             if (stackHere) cls += ' stackable-opponent';
             if (dealAnim) cls += ' card-animate-in';
@@ -901,6 +929,10 @@ function renderPlayerHand(dealAnim) {
             card.classList.add('stackable-own');
             card.title = 'Double-click to stack on discard';
         }
+        if (gameState.pendingStackGive && slot.hasCard) {
+            card.classList.add('stack-give-pick');
+            card.title = 'Click to give this card to your opponent';
+        }
         if (i === selectedSlot) card.classList.add('selected');
 
         card.dataset.slot = String(i);
@@ -921,6 +953,10 @@ function renderPlayerHand(dealAnim) {
 
 function handleOwnCardClick(slot) {
     const phase = gameState.phase;
+    if (gameState.pendingStackGive) {
+        sendAction('stack_give', { slot });
+        return;
+    }
     if (phase === 'init_peek') {
         if (slot > 1) return;
         const mask = gameState.initPeekMask ?? 0;
@@ -987,27 +1023,44 @@ function skipAbility() {
 }
 
 function checkGameOver() {
-    if (gameState?.phase === 'scoring' && gameState.scores) {
-        clearSession();
-        showScores(gameState.scores);
-    }
+    if (gameState?.phase !== 'scoring') return;
+    const scores = gameState.scores;
+    if (!scores || Object.keys(scores).length === 0) return;
+    clearSession();
+    showScores(scores);
 }
 
 function showScores(scores) {
     showScreen('scores');
     const entries = Object.entries(scores || {});
+    const announce = $('#winnerAnnounce');
+    const nameEl = $('#winnerName');
+    const scoreEl = $('#winnerScore');
     if (entries.length === 0) {
+        if (announce) announce.classList.add('hidden');
         $('#scoreBoard').innerHTML = '<p class="games-empty">No scores recorded.</p>';
         return;
     }
     const sorted = entries.sort((a, b) => a[1] - b[1]);
     const lowest = sorted[0][1];
+    const winners = sorted.filter(([, score]) => score === lowest);
+    const winnerNames = winners.map(([pid]) => getPlayerName(pid)).join(' & ');
+
+    if (announce && nameEl && scoreEl) {
+        announce.classList.remove('hidden');
+        nameEl.textContent = winnerNames;
+        scoreEl.textContent =
+            winners.length > 1
+                ? `Tied at ${lowest} points`
+                : `${lowest} point${lowest === 1 ? '' : 's'}`;
+    }
+
     $('#scoreBoard').innerHTML = sorted
         .map(([pid, score]) => {
             const name = getPlayerName(pid);
             const win = score === lowest;
             return `<div class="score-row ${win ? 'winner' : ''}">
-                <span>${escapeHtml(name)} ${win ? '★' : ''}</span>
+                <span>${escapeHtml(name)}${win ? ' ★' : ''}</span>
                 <span class="score-value">${score}</span>
             </div>`;
         })

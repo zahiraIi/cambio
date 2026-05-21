@@ -15,6 +15,18 @@ func (e *Engine) NextAutomaticBotID() string {
 			}
 		}
 	case PhaseTurns, PhaseFinalRound:
+		if e.pendingStackGiveActor != "" {
+			p := e.findPlayer(e.pendingStackGiveActor)
+			if p != nil && p.IsBot {
+				return p.ID
+			}
+		}
+		if len(e.Players) > 0 && e.CurrentTurn >= 0 && e.CurrentTurn < len(e.Players) {
+			cur := e.Players[e.CurrentTurn]
+			if cur.IsBot && e.PendingAbility != NoAbility {
+				return cur.ID
+			}
+		}
 		if !e.stackRankClaimed && e.openStackRank != 0 && e.StackWindowReadyForBots() {
 			for _, p := range e.Players {
 				if !p.IsBot {
@@ -61,12 +73,12 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		return Action{Type: ActionInitPeek, PlayerID: botID, Slot: slot}, true
 	}
 
-	if !e.stackRankClaimed && e.openStackRank != 0 && e.StackWindowReadyForBots() {
-		for s := 0; s < HandSize; s++ {
-			if c := bot.Hand[s]; c != nil && c.Rank == e.openStackRank {
-				return Action{Type: ActionSnapMatch, PlayerID: botID, Slot: s}, true
-			}
+	if e.pendingStackGiveActor == botID {
+		slots := slotsWithCards(bot)
+		if len(slots) == 0 {
+			return Action{}, false
 		}
+		return Action{Type: ActionStackGive, PlayerID: botID, Slot: slots[rand.IntN(len(slots))]}, true
 	}
 
 	if e.PendingAbility != NoAbility {
@@ -76,7 +88,26 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		if e.Players[e.CurrentTurn].ID != botID {
 			return Action{}, false
 		}
-		return e.botResolveAbility(botID, bot)
+		act, ok := e.botResolveAbility(botID, bot)
+		// #region agent log
+		agentDebugLog("A", "bot.go:BotChooseAction", "pending ability branch", map[string]interface{}{
+			"botID": botID, "pending": abilityName(e.PendingAbility), "actionType": int(act.Type), "ok": ok,
+		})
+		// #endregion
+		return act, ok
+	}
+
+	if !e.stackRankClaimed && e.openStackRank != 0 && e.StackWindowReadyForBots() {
+		for s := 0; s < HandSize; s++ {
+			if c := bot.Hand[s]; c != nil && c.Rank == e.openStackRank {
+				// #region agent log
+				agentDebugLog("A", "bot.go:BotChooseAction", "stack snap branch", map[string]interface{}{
+					"botID": botID, "slot": s, "openStackRank": int(e.openStackRank),
+				})
+				// #endregion
+				return Action{Type: ActionSnapMatch, PlayerID: botID, Slot: s}, true
+			}
+		}
 	}
 
 	if e.Phase != PhaseTurns && e.Phase != PhaseFinalRound {

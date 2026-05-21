@@ -7,6 +7,8 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -31,7 +33,25 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/games/create", h.handleCreateGame)
 	mux.HandleFunc("/api/games/solo", h.handleSoloGame)
 	mux.HandleFunc("/ws", h.handleWebSocket)
-	mux.Handle("/", http.FileServer(http.Dir("web")))
+	webRoot := resolveWebRoot()
+	log.Printf("Serving web UI from %s", webRoot)
+	mux.Handle("/", http.FileServer(http.Dir(webRoot)))
+}
+
+func resolveWebRoot() string {
+	if wd, err := os.Getwd(); err == nil {
+		candidates := []string{
+			filepath.Join(wd, "web"),
+			filepath.Join(wd, "..", "web"),
+			filepath.Join(wd, "..", "..", "web"),
+		}
+		for _, dir := range candidates {
+			if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+				return dir
+			}
+		}
+	}
+	return "web"
 }
 
 func (h *Handler) handleGames(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +255,7 @@ func (h *Handler) handleAction(room *GameRoom, client *Client, msg WSMessage) {
 		"call_cambio":    game.ActionCallCambio,
 		"snap":           game.ActionSnapMatch,
 		"stack_opponent": game.ActionStackOpponent,
+		"stack_give":     game.ActionStackGive,
 	}
 
 	if msg.Action == "start" {
@@ -308,6 +329,10 @@ func (h *Handler) broadcastEngineEvents(room *GameRoom, events []game.Event) {
 
 func (h *Handler) pumpBots(room *GameRoom) {
 	if !atomic.CompareAndSwapInt32(&room.botPump, 0, 1) {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			h.pumpBots(room)
+		}()
 		return
 	}
 	go func() {
@@ -323,13 +348,21 @@ func (h *Handler) pumpBots(room *GameRoom) {
 			act, ok := room.Engine.BotChooseAction(botID)
 			if !ok {
 				log.Printf("bot: no move for %s", botID)
-				events := room.Engine.ForceSkipAbility()
+				events := room.Engine.ForceSkipStackGive()
+				if len(events) == 0 {
+					events = room.Engine.ForceSkipAbility()
+				}
 				h.broadcastEngineEvents(room, events)
 				continue
 			}
 			events, err := room.Engine.Execute(act)
 			if err != nil {
 				log.Printf("bot execute: %v", err)
+				// #region agent log
+				game.AgentDebugLog("B", "handler.go:pumpBots", "bot execute failed", map[string]interface{}{
+					"botID": botID, "actionType": int(act.Type), "error": err.Error(),
+				})
+				// #endregion
 				continue
 			}
 			h.broadcastEngineEvents(room, events)
