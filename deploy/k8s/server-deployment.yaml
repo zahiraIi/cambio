@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cambio-server
+  namespace: cambio
+  labels:
+    app: cambio
+    component: server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cambio
+      component: server
+  template:
+    metadata:
+      labels:
+        app: cambio
+        component: server
+    spec:
+      containers:
+        - name: server
+          image: cambio-server:latest
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /api/games
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/games
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30

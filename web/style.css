@@ -1,0 +1,1003 @@
+:root {
+    --felt: #1a5c38;
+    --felt-dark: #0f3d25;
+    --felt-light: #247a4a;
+    --rail: #3d2817;
+    --rail-light: #5c3d22;
+    --room-bg: #0c0f14;
+    --surface: rgba(18, 24, 38, 0.92);
+    --surface-border: rgba(255, 255, 255, 0.08);
+    --primary: #38bdf8;
+    --primary-glow: rgba(56, 189, 248, 0.45);
+    --accent: #f472b6;
+    --accent-glow: rgba(244, 114, 182, 0.4);
+    --text: #f1f5f9;
+    --text-dim: #94a3b8;
+    --card-bg: #faf8f2;
+    --card-back: linear-gradient(145deg, #1e4d7b 0%, #0f2844 100%);
+    --card-red: #dc2626;
+    --card-black: #1e293b;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --radius: 14px;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--room-bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse 120% 80% at 50% 100%, rgba(26, 92, 56, 0.12) 0%, transparent 55%),
+        radial-gradient(circle at 50% 50%, transparent 0%, rgba(0, 0, 0, 0.55) 100%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+#app {
+    position: relative;
+    z-index: 1;
+}
+
+.screen {
+    display: none;
+    min-height: 100vh;
+    padding: 1.5rem;
+}
+
+.screen.active {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ── Lobby ── */
+.lobby-card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--surface-border);
+    border-radius: 20px;
+    padding: 2rem 1.75rem;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: 0.35em;
+    text-indent: 0.35em;
+    color: var(--primary);
+    text-align: center;
+}
+
+h2 {
+    text-align: center;
+    font-weight: 600;
+}
+
+.subtitle {
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+}
+
+.lobby-form {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.field-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 0.25rem;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--surface-border);
+    color: var(--text);
+    padding: 0.7rem 0.9rem;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s var(--ease-out), box-shadow 0.2s;
+    width: 100%;
+}
+
+input:focus,
+select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+}
+
+.lobby-divider {
+    margin-top: 0.75rem;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-align: center;
+}
+
+.join-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.join-row input {
+    flex: 1;
+}
+
+.btn {
+    padding: 0.7rem 1.25rem;
+    border: none;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s var(--ease-out), box-shadow 0.2s, background 0.2s;
+}
+
+.btn:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+.btn-primary {
+    background: linear-gradient(180deg, #4fc3f7 0%, #0284c7 100%);
+    color: #0c0f14;
+}
+
+.btn-primary:hover:not(:disabled) {
+    box-shadow: 0 8px 24px var(--primary-glow);
+}
+
+.btn-accent {
+    background: linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%);
+    color: white;
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    border: 1px solid var(--surface-border);
+}
+
+.btn-small {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.78rem;
+}
+
+.btn-text {
+    background: none;
+    border: none;
+    color: var(--primary);
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.btn-play {
+    margin-top: 0.15rem;
+}
+
+.btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.games-section {
+    margin-top: 1.5rem;
+    border-top: 1px solid var(--surface-border);
+    padding-top: 1rem;
+}
+
+.games-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+}
+
+.games-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.game-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.55rem 0.75rem;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    font-size: 0.82rem;
+}
+
+.game-row button {
+    padding: 0.3rem 0.65rem;
+    font-size: 0.72rem;
+}
+
+.games-empty {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    text-align: center;
+    padding: 0.75rem;
+}
+
+/* ── Waiting room ── */
+.waiting-card {
+    text-align: center;
+}
+
+.room-code-label {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-top: 1rem;
+}
+
+.room-code-row {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    align-items: center;
+    margin: 0.75rem 0;
+    flex-wrap: wrap;
+}
+
+.room-code {
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--primary);
+    background: rgba(56, 189, 248, 0.1);
+    padding: 0.5rem 1rem;
+    border-radius: 10px;
+}
+
+.waiting-meta {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+
+.players-list {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 1rem 0;
+}
+
+.player-tag {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 0.45rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid var(--surface-border);
+    font-size: 0.82rem;
+    animation: fadeSlideUp 0.35s var(--ease-out);
+}
+
+.start-hint {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-top: 0.75rem;
+}
+
+/* ── Connection badge ── */
+.connection-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.connection-badge::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.connection-badge.online {
+    color: var(--success);
+    background: rgba(74, 222, 128, 0.12);
+}
+
+.connection-badge.offline {
+    color: var(--danger);
+    background: rgba(248, 113, 113, 0.12);
+}
+
+.connection-badge.reconnecting {
+    color: var(--warning);
+    background: rgba(251, 191, 36, 0.12);
+}
+
+.connection-badge.reconnecting::before {
+    animation: pulse 1s ease-in-out infinite;
+}
+
+#connectionBadgeLobby {
+    margin: 1rem auto 0;
+}
+
+/* ── Poker room ── */
+#game.screen.active {
+    max-width: none;
+    width: 100%;
+    padding: 0.75rem 1rem 1rem;
+    justify-content: flex-start;
+}
+
+.poker-room {
+    min-height: 100vh;
+    position: relative;
+}
+
+.room-chrome {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto 0.5rem;
+    gap: 0.5rem;
+}
+
+.chrome-center {
+    display: flex;
+    gap: 0.65rem;
+    align-items: center;
+    justify-content: center;
+}
+
+.phase-badge {
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--primary);
+    padding: 0.25rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.deck-count {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+}
+
+.turn-banner {
+    justify-self: end;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    transition: color 0.3s, text-shadow 0.3s;
+}
+
+.turn-banner.my-turn {
+    color: var(--warning);
+    text-shadow: 0 0 20px rgba(251, 191, 36, 0.5);
+    animation: turnPulse 1.8s ease-in-out infinite;
+}
+
+/* ── Table ── */
+.table-stage {
+    flex: 1;
+    width: 100%;
+    max-width: 920px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 0;
+    padding-bottom: 0.25rem;
+}
+
+.table-scene {
+    flex: 0 1 auto;
+    width: 100%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    max-height: min(48vh, 380px);
+    perspective: 900px;
+}
+
+.table-rail {
+    width: min(92vw, 780px);
+    aspect-ratio: 2.1 / 1;
+    background: linear-gradient(180deg, var(--rail-light) 0%, var(--rail) 40%, #2a1a0e 100%);
+    border-radius: 50%;
+    padding: 14px;
+    box-shadow:
+        0 20px 60px rgba(0, 0, 0, 0.6),
+        inset 0 2px 4px rgba(255, 255, 255, 0.08);
+}
+
+.table-felt {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background:
+        radial-gradient(ellipse 70% 55% at 50% 45%, var(--felt-light) 0%, var(--felt) 45%, var(--felt-dark) 100%);
+    position: relative;
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.35);
+}
+
+.table-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    z-index: 2;
+}
+
+.pile {
+    cursor: pointer;
+    transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+}
+
+.pile.discard-drop-target {
+    cursor: copy;
+}
+
+.pile.discard-drop-active {
+    transform: translateY(-6px) scale(1.06);
+    box-shadow: 0 0 24px rgba(56, 189, 248, 0.45);
+}
+
+.drawn-card-display[draggable="true"] {
+    cursor: grab;
+}
+
+.drawn-card-display.dragging {
+    opacity: 0.75;
+    cursor: grabbing;
+    transform: scale(1.05);
+}
+
+.pile:hover {
+    transform: translateY(-3px) scale(1.03);
+}
+
+.deck-stack {
+    box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.2), 4px 4px 0 rgba(0, 0, 0, 0.15);
+}
+
+/* ── Seats ── */
+.seats {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.seat {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    pointer-events: auto;
+    transition: transform 0.4s var(--ease-out), filter 0.3s;
+}
+
+.seat.active-turn .seat-avatar {
+    box-shadow: 0 0 0 3px var(--warning), 0 0 24px rgba(251, 191, 36, 0.45);
+    animation: seatGlow 1.6s ease-in-out infinite;
+}
+
+.seat-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(145deg, #334155, #1e293b);
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text);
+    transition: box-shadow 0.3s;
+}
+
+.seat-name {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    max-width: 90px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.seat.active-turn .seat-name {
+    color: var(--warning);
+    font-weight: 600;
+}
+
+.seat-hand {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.seat.cambio .seat-name::after {
+    content: ' · CAMBIO';
+    color: var(--accent);
+}
+
+/* ── Cards ── */
+.card {
+    width: 52px;
+    height: 74px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    position: relative;
+    transition: transform 0.28s var(--ease-spring), box-shadow 0.28s;
+    user-select: none;
+}
+
+.card-back {
+    background: var(--card-back);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.card-face {
+    background: var(--card-bg);
+    border: 1px solid #d6cfc0;
+    color: var(--card-black);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.card-face.red {
+    color: var(--card-red);
+}
+
+.card-empty {
+    background: transparent;
+    border: 2px dashed rgba(255, 255, 255, 0.15);
+}
+
+.card-label {
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 0.55rem;
+    letter-spacing: 0.06em;
+}
+
+.card-small {
+    width: 36px;
+    height: 52px;
+    font-size: 0.65rem;
+}
+
+.card.clickable {
+    cursor: pointer;
+}
+
+.card.clickable:hover {
+    transform: translateY(-6px) scale(1.04);
+    z-index: 5;
+    box-shadow: 0 10px 24px rgba(56, 189, 248, 0.25);
+}
+
+.card.selected {
+    transform: translateY(-10px) scale(1.06);
+    box-shadow: 0 0 0 2px var(--primary), 0 12px 28px var(--primary-glow);
+    z-index: 6;
+}
+
+.card.init-peek-disabled {
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+.card.stackable-opponent {
+    box-shadow: 0 0 0 2px var(--success), 0 0 16px rgba(74, 222, 128, 0.35);
+    cursor: pointer;
+}
+
+.card.stackable-opponent:hover {
+    transform: translateY(-4px) scale(1.05);
+}
+
+.card.known {
+    background: var(--card-bg);
+    border: 1px solid rgba(74, 222, 128, 0.5);
+    color: var(--card-black);
+}
+
+.card.known.red {
+    color: var(--card-red);
+}
+
+.card.memory-fade {
+    background: rgba(250, 248, 242, 0.85);
+    border: 1px dashed rgba(148, 163, 184, 0.55);
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    transition: opacity 0.4s var(--ease-out);
+}
+
+.card.init-peek-hint {
+    box-shadow: 0 0 0 2px var(--warning), 0 0 18px rgba(251, 191, 36, 0.35);
+    animation: initPeekPulse 1.6s ease-in-out infinite;
+}
+
+.card.init-peek-done {
+    opacity: 0.55;
+}
+
+@keyframes initPeekPulse {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+}
+
+.card-animate-in {
+    animation: cardDeal 0.45s var(--ease-spring) both;
+}
+
+.card-animate-draw {
+    animation: cardDraw 0.5s var(--ease-out) both;
+}
+
+/* ── Hero panel ── */
+.hero-panel {
+    width: 100%;
+    max-width: 680px;
+    margin: 0;
+    padding-bottom: 0.25rem;
+    flex-shrink: 0;
+}
+
+.hand {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    min-height: 120px;
+    align-items: flex-end;
+}
+
+.hand-pov .card {
+    width: 72px;
+    height: 102px;
+    font-size: 1rem;
+}
+
+.hand-pov .card:nth-child(1) { transform: rotate(-4deg); }
+.hand-pov .card:nth-child(2) { transform: rotate(-1.5deg); }
+.hand-pov .card:nth-child(3) { transform: rotate(1.5deg); }
+.hand-pov .card:nth-child(4) { transform: rotate(4deg); }
+
+.hand-pov .card.selected,
+.hand-pov .card.clickable:hover {
+    transform: translateY(-12px) rotate(0deg) scale(1.05);
+}
+
+.action-bar {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: center;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+}
+
+.btn-chip {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    padding: 0.65rem 1.35rem;
+    border-radius: 999px;
+    font-weight: 600;
+    backdrop-filter: blur(8px);
+}
+
+.btn-chip:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.btn-chip-accent {
+    background: linear-gradient(180deg, rgba(244, 114, 182, 0.35), rgba(219, 39, 119, 0.35));
+    border-color: rgba(244, 114, 182, 0.4);
+}
+
+.btn-cambio {
+    background: linear-gradient(180deg, #f472b6 0%, #db2777 100%);
+    color: white;
+    padding: 0.65rem 1.75rem;
+    border-radius: 999px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    border: none;
+}
+
+.btn-cambio:hover:not(:disabled) {
+    box-shadow: 0 8px 28px var(--accent-glow);
+}
+
+/* ── Drawn card float ── */
+.drawn-float {
+    position: relative;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    animation: fadeSlideUp 0.4s var(--ease-out);
+    flex-shrink: 0;
+    margin: -0.25rem 0 0.15rem;
+}
+
+.drawn-card-display {
+    width: 80px;
+    height: 112px;
+    background: var(--card-bg);
+    border: 2px solid var(--primary);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--card-black);
+    box-shadow: 0 12px 40px var(--primary-glow);
+}
+
+.drawn-card-display.red {
+    color: var(--card-red);
+}
+
+.drawn-ability-hint {
+    font-size: 0.72rem;
+    color: var(--warning);
+    text-align: center;
+    max-width: 220px;
+}
+
+.drawn-actions {
+    display: flex;
+    gap: 0.45rem;
+}
+
+/* ── Ability overlay ── */
+.ability-overlay {
+    position: fixed;
+    bottom: 140px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 25;
+    animation: fadeSlideUp 0.35s var(--ease-out);
+}
+
+.ability-card {
+    background: var(--surface);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    border-radius: 14px;
+    padding: 0.85rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+}
+
+.ability-card p {
+    color: var(--warning);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+/* ── Toasts ── */
+.toast-stack {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    max-width: 320px;
+    pointer-events: none;
+}
+
+.toast {
+    background: var(--surface);
+    border: 1px solid var(--surface-border);
+    border-radius: 10px;
+    padding: 0.65rem 0.9rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: toastIn 0.4s var(--ease-out), toastOut 0.35s var(--ease-out) 3.2s forwards;
+    backdrop-filter: blur(10px);
+}
+
+.toast.important {
+    color: var(--primary);
+    border-color: rgba(56, 189, 248, 0.25);
+}
+
+/* ── Scores ── */
+.score-board {
+    margin: 1.5rem 0;
+    width: 100%;
+}
+
+.score-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.85rem 1rem;
+    margin: 0.4rem 0;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 10px;
+}
+
+.score-row.winner {
+    border: 1px solid rgba(74, 222, 128, 0.4);
+    background: rgba(74, 222, 128, 0.08);
+}
+
+.score-value {
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ── Animations ── */
+@keyframes cardDeal {
+    from {
+        opacity: 0;
+        transform: translateY(40px) scale(0.6) rotate(-8deg);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1) rotate(0);
+    }
+}
+
+@keyframes cardDraw {
+    from {
+        opacity: 0;
+        transform: translate(-80px, -60px) scale(0.5);
+    }
+    to {
+        opacity: 1;
+        transform: translate(0, 0) scale(1);
+    }
+}
+
+@keyframes fadeSlideUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateX(24px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes toastOut {
+    to {
+        opacity: 0;
+        transform: translateX(24px);
+    }
+}
+
+@keyframes turnPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.75; }
+}
+
+@keyframes seatGlow {
+    0%, 100% { box-shadow: 0 0 0 3px var(--warning), 0 0 20px rgba(251, 191, 36, 0.35); }
+    50% { box-shadow: 0 0 0 3px var(--warning), 0 0 32px rgba(251, 191, 36, 0.55); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.turn-changed-flash .table-felt {
+    animation: feltFlash 0.6s var(--ease-out);
+}
+
+@keyframes feltFlash {
+    0% { filter: brightness(1); }
+    40% { filter: brightness(1.15); }
+    100% { filter: brightness(1); }
+}
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+    .table-rail {
+        width: 96vw;
+    }
+
+    .hand-pov .card {
+        width: 62px;
+        height: 88px;
+        font-size: 0.85rem;
+    }
+
+    .card-small {
+        width: 30px;
+        height: 44px;
+    }
+
+    .room-chrome {
+        grid-template-columns: 1fr;
+        text-align: center;
+    }
+
+    .turn-banner {
+        justify-self: center;
+    }
+}

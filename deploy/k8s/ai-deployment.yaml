@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cambio-ai-trainer
+  namespace: cambio
+  labels:
+    app: cambio
+    component: ai-trainer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cambio
+      component: ai-trainer
+  template:
+    metadata:
+      labels:
+        app: cambio
+        component: ai-trainer
+    spec:
+      containers:
+        - name: trainer
+          image: cambio-ai:latest
+          command: ["python", "train.py", "--episodes", "100000", "--self-play", "--save-path", "/data/models/cambio"]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: model-storage
+              mountPath: /data/models
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: cambio-models-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cambio-models-pvc
+  namespace: cambio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

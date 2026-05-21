@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cambio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Lobby -->
+        <div id="lobby" class="screen active">
+            <div class="lobby-card">
+                <h1>CAMBIO</h1>
+                <p class="subtitle">Online card table</p>
+
+                <div id="connectionBadgeLobby" class="connection-badge offline">Offline</div>
+
+                <div class="lobby-form">
+                    <input type="text" id="playerName" placeholder="Your name" maxlength="20" autocomplete="nickname">
+                    <label class="field-label" for="botCount">Practice bots (1–5)</label>
+                    <input type="number" id="botCount" min="1" max="5" value="2">
+                    <label class="field-label" for="botDifficulty">Bot difficulty</label>
+                    <select id="botDifficulty">
+                        <option value="1">Easy — forgets quickly</option>
+                        <option value="2" selected>Medium</option>
+                        <option value="3">Hard — sharp memory</option>
+                    </select>
+                    <button id="soloPlayBtn" type="button" class="btn btn-primary btn-play">Play vs bots</button>
+
+                    <p class="lobby-divider">Play online</p>
+                    <label class="field-label" for="maxPlayers">Table size</label>
+                    <select id="maxPlayers">
+                        <option value="2">2 players</option>
+                        <option value="3">3 players</option>
+                        <option value="4" selected>4 players</option>
+                        <option value="5">5 players</option>
+                        <option value="6">6 players</option>
+                    </select>
+                    <button id="createGameBtn" type="button" class="btn btn-accent">Create online table</button>
+                    <div class="join-row">
+                        <input type="text" id="gameIdInput" placeholder="Room code">
+                        <button id="joinGameBtn" type="button" class="btn btn-secondary">Join</button>
+                    </div>
+                </div>
+
+                <div class="games-section">
+                    <div class="games-header">
+                        <span>Open tables</span>
+                        <button id="refreshGamesBtn" type="button" class="btn-text">Refresh</button>
+                    </div>
+                    <div id="gamesList" class="games-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Waiting Room -->
+        <div id="waiting" class="screen">
+            <div class="lobby-card waiting-card">
+                <h2>Waiting room</h2>
+                <p class="room-code-label">Share this code with friends</p>
+                <div class="room-code-row">
+                    <code id="waitingGameId" class="room-code"></code>
+                    <button id="copyRoomBtn" type="button" class="btn btn-small btn-secondary">Copy link</button>
+                </div>
+                <p id="waitingMeta" class="waiting-meta"></p>
+                <div id="playersList" class="players-list"></div>
+                <div id="connectionBadgeWait" class="connection-badge online">Connected</div>
+                <button id="startGameBtn" type="button" class="btn btn-primary btn-play">Start game</button>
+                <p id="startHint" class="start-hint">Need at least 2 players to start</p>
+            </div>
+        </div>
+
+        <!-- Game -->
+        <div id="game" class="screen poker-room">
+            <div class="room-chrome">
+                <div id="connectionBadge" class="connection-badge online">Live</div>
+                <div class="chrome-center">
+                    <span id="phaseDisplay" class="phase-badge"></span>
+                    <span id="deckCount" class="deck-count"></span>
+                </div>
+                <div id="turnIndicator" class="turn-banner"></div>
+            </div>
+
+            <div class="table-stage">
+            <div class="table-scene">
+                <div class="table-rail">
+                    <div class="table-felt">
+                        <div id="seats" class="seats"></div>
+                        <div class="table-center">
+                            <div class="pile deck-pile" id="deckPile" title="Draw from deck">
+                                <div class="card card-back deck-stack">
+                                    <span class="card-label">DECK</span>
+                                </div>
+                            </div>
+                            <div class="pile discard-pile" id="discardPile">
+                                <div class="card card-empty"><span class="card-label">DISCARD</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="drawnCardArea" class="drawn-float hidden">
+                <div class="drawn-card-display card-animate-in">
+                    <span id="drawnCardValue"></span>
+                </div>
+                <p id="drawnAbilityHint" class="drawn-ability-hint hidden"></p>
+                <div class="drawn-actions">
+                    <button type="button" id="drawnSwapBtn" class="btn btn-chip">Swap</button>
+                    <button type="button" id="drawnPlayBtn" class="btn btn-chip btn-chip-accent">Discard</button>
+                </div>
+            </div>
+
+            <div class="hero-panel">
+                <div id="playerHand" class="hand hand-pov"></div>
+                <div class="action-bar">
+                    <button type="button" id="drawDeckBtn" class="btn btn-chip">Draw deck</button>
+                    <button type="button" id="drawDiscardBtn" class="btn btn-chip">Draw discard</button>
+                    <button type="button" id="cambioBtn" class="btn btn-cambio">CAMBIO</button>
+                </div>
+            </div>
+            </div>
+
+            <div id="abilityPrompt" class="ability-overlay hidden">
+                <div class="ability-card">
+                    <p id="abilityText"></p>
+                    <button type="button" id="abilitySkipBtn" class="btn btn-small btn-secondary">Skip</button>
+                </div>
+            </div>
+
+            <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+        </div>
+
+        <!-- Scores -->
+        <div id="scores" class="screen">
+            <div class="lobby-card">
+                <h2>Hand complete</h2>
+                <div id="scoreBoard" class="score-board"></div>
+                <button type="button" class="btn btn-primary" onclick="location.href='/'">Play again</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
