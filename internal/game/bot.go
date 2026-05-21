@@ -1,6 +1,6 @@
 package game
 
-import "math/rand"
+import "math/rand/v2"
 
 // NextAutomaticBotID returns a bot player ID that should act next, or "".
 func (e *Engine) NextAutomaticBotID() string {
@@ -45,7 +45,7 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		if len(slots) == 0 {
 			return Action{}, false
 		}
-		slot := slots[rand.Intn(len(slots))]
+		slot := slots[rand.IntN(len(slots))]
 		return Action{Type: ActionInitPeek, PlayerID: botID, Slot: slot}, true
 	}
 
@@ -73,21 +73,21 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		if e.DrawnCard.Ability() != NoAbility && rand.Float32() < 0.82 {
 			return Action{Type: ActionDiscard, PlayerID: botID}, true
 		}
-		if rand.Intn(2) == 0 {
+		if rand.IntN(2) == 0 {
 			return Action{Type: ActionDiscard, PlayerID: botID}, true
 		}
 		slots := slotsWithCards(bot)
 		if len(slots) == 0 {
 			return Action{Type: ActionDiscard, PlayerID: botID}, true
 		}
-		return Action{Type: ActionSwapCard, PlayerID: botID, Slot: slots[rand.Intn(len(slots))]}, true
+		return Action{Type: ActionSwapCard, PlayerID: botID, Slot: slots[rand.IntN(len(slots))]}, true
 	}
 
 	if e.Phase == PhaseTurns && rand.Float32() < 0.1 && bot.Score() <= 14 {
 		return Action{Type: ActionCallCambio, PlayerID: botID}, true
 	}
 
-	if len(e.DiscardPile) > 0 && rand.Intn(4) != 0 {
+	if len(e.DiscardPile) > 0 && rand.IntN(4) != 0 {
 		return Action{Type: ActionDrawDiscard, PlayerID: botID}, true
 	}
 	return Action{Type: ActionDrawDeck, PlayerID: botID}, true
@@ -113,7 +113,7 @@ func (e *Engine) botResolveAbility(botID string, bot *Player) (Action, bool) {
 		if len(slots) == 0 {
 			return Action{}, false
 		}
-		return Action{Type: ActionPeekOwn, PlayerID: botID, Slot: slots[rand.Intn(len(slots))]}, true
+		return Action{Type: ActionPeekOwn, PlayerID: botID, Slot: slots[rand.IntN(len(slots))]}, true
 	case BlindSwitch:
 		return botPickBlindSwitch(e, botID, bot)
 	case LookAndSwitch:
@@ -133,12 +133,12 @@ func botPickPeekOpponent(e *Engine, botID string) (Action, bool) {
 	if len(candidates) == 0 {
 		return Action{}, false
 	}
-	target := candidates[rand.Intn(len(candidates))]
+	target := candidates[rand.IntN(len(candidates))]
 	slots := slotsWithCards(target)
 	if len(slots) == 0 {
 		return Action{}, false
 	}
-	ts := slots[rand.Intn(len(slots))]
+	ts := slots[rand.IntN(len(slots))]
 	return Action{Type: ActionPeekOpponent, PlayerID: botID, TargetID: target.ID, TargetSlot: ts}, true
 }
 
@@ -166,9 +166,9 @@ func botPickBlindSwitch(e *Engine, botID string, bot *Player) (Action, bool) {
 	if len(oppCandidates) == 0 {
 		return Action{}, false
 	}
-	ch := oppCandidates[rand.Intn(len(oppCandidates))]
-	ms := mySlots[rand.Intn(len(mySlots))]
-	ts := ch.s[rand.Intn(len(ch.s))]
+	ch := oppCandidates[rand.IntN(len(oppCandidates))]
+	ms := mySlots[rand.IntN(len(mySlots))]
+	ts := ch.s[rand.IntN(len(ch.s))]
 	return Action{
 		Type: ActionBlindSwitch, PlayerID: botID,
 		Slot: ms, TargetID: ch.p.ID, TargetSlot: ts,
@@ -199,9 +199,9 @@ func botPickLookSwitch(e *Engine, botID string, bot *Player) (Action, bool) {
 	if len(oppCandidates) == 0 {
 		return Action{}, false
 	}
-	ch := oppCandidates[rand.Intn(len(oppCandidates))]
-	ms := mySlots[rand.Intn(len(mySlots))]
-	ts := ch.s[rand.Intn(len(ch.s))]
+	ch := oppCandidates[rand.IntN(len(oppCandidates))]
+	ms := mySlots[rand.IntN(len(mySlots))]
+	ts := ch.s[rand.IntN(len(ch.s))]
 	return Action{
 		Type: ActionLookAndSwitch, PlayerID: botID,
 		Slot: ms, TargetID: ch.p.ID, TargetSlot: ts,

@@ -15,23 +15,6 @@ const MEMORY_RECALL_MIN = 0.35;
 
 const $ = (sel) => document.querySelector(sel);
 
-// #region agent log
-function debugLog(hypothesisId, location, message, data = {}) {
-    fetch('http://127.0.0.1:7908/ingest/136667ff-43c3-4463-9072-32fdc130bb79', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '1b9773' },
-        body: JSON.stringify({
-            sessionId: '1b9773',
-            hypothesisId,
-            location,
-            message,
-            data,
-            timestamp: Date.now(),
-        }),
-    }).catch(() => {});
-}
-// #endregion
-
 let reconnectAttempts = 0;
 const MAX_RECONNECT = 8;
 
@@ -240,15 +223,6 @@ $('#copyRoomBtn')?.addEventListener('click', async () => {
 });
 
 function joinGame(gameId, playerName, fixedPlayerId = null) {
-    // #region agent log
-    debugLog('A', 'app.js:joinGame', 'joinGame called', {
-        gameId,
-        fixedPlayerId,
-        soloSession,
-        prevGameId: currentGameId,
-        prevPlayerId: myPlayerId,
-    });
-    // #endregion
     currentGameId = gameId;
     currentPlayerName = playerName;
     myPlayerId = fixedPlayerId || `p-${Date.now().toString(36)}`;
@@ -258,14 +232,6 @@ function joinGame(gameId, playerName, fixedPlayerId = null) {
 }
 
 function connectWS(gameId, playerName, playerId) {
-    // #region agent log
-    debugLog('C', 'app.js:connectWS', 'connectWS start', {
-        gameId,
-        playerId,
-        hadPrevWs: !!ws,
-        prevWsState: ws?.readyState,
-    });
-    // #endregion
     if (ws) {
         ws.onclose = null;
         ws.close();
@@ -278,9 +244,6 @@ function connectWS(gameId, playerName, playerId) {
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-        // #region agent log
-        debugLog('A', 'app.js:ws.onopen', 'WebSocket opened', { gameId, playerId });
-        // #endregion
         reconnectAttempts = 0;
         setConnectionStatus('online');
         if (!soloSession) {
@@ -300,22 +263,9 @@ function connectWS(gameId, playerName, playerId) {
     };
 
     ws.onerror = (ev) => {
-        // #region agent log
-        debugLog('A', 'app.js:ws.onerror', 'WebSocket error', { gameId, playerId, type: ev?.type });
-        // #endregion
     };
 
     ws.onclose = (ev) => {
-        // #region agent log
-        debugLog('B', 'app.js:ws.onclose', 'WebSocket closed', {
-            gameId,
-            playerId,
-            code: ev?.code,
-            reason: ev?.reason,
-            wasClean: ev?.wasClean,
-            currentWsIsThis: ws?.url?.includes(encodeURIComponent(gameId)),
-        });
-        // #endregion
         setConnectionStatus('offline');
         toast('Disconnected from server');
         const canReconnect =
@@ -342,12 +292,6 @@ $('#startGameBtn').addEventListener('click', () => {
 function handleMessage(msg) {
     switch (msg.type) {
         case 'connected':
-            // #region agent log
-            debugLog('B', 'app.js:handleMessage', 'connected message', {
-                phase: msg.state?.phase,
-                playerCount: msg.state?.players?.length,
-            });
-            // #endregion
             gameState = msg.state;
             if (msg.room) renderLobby(msg.room);
             if (gameState.phase !== 'waiting') {
@@ -374,9 +318,6 @@ function handleMessage(msg) {
             handleEvent(msg.event);
             break;
         case 'error':
-            // #region agent log
-            debugLog('B', 'app.js:handleMessage', 'server error message', { error: msg.error });
-            // #endregion
             toast('Error: ' + (msg.error || JSON.stringify(msg)), true);
             break;
         default:
@@ -904,13 +845,6 @@ $('#abilitySkipBtn').addEventListener('click', skipAbility);
                 currentGameId = s.gameId;
                 currentPlayerName = s.playerName;
                 myPlayerId = s.playerId;
-                // #region agent log
-                debugLog('C', 'app.js:init', 'session restore auto-connect', {
-                    gameId: s.gameId,
-                    playerId: s.playerId,
-                    solo: s.solo,
-                });
-                // #endregion
                 connectWS(s.gameId, s.playerName, s.playerId);
             }
         } catch {

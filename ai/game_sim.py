@@ -378,15 +378,11 @@ class CambioSim:
         self.current_turn = (self.current_turn + 1) % self.num_players
 
         if self.phase == Phase.FINAL_ROUND:
+            if self.current_turn == self.cambio_caller:
+                self.current_turn = (self.current_turn + 1) % self.num_players
             self.turns_after_cambio += 1
             if self.turns_after_cambio >= self.num_players - 1:
                 self.phase = Phase.DONE
-                return
-            if self.current_turn == self.cambio_caller:
-                self.current_turn = (self.current_turn + 1) % self.num_players
-                self.turns_after_cambio += 1
-                if self.turns_after_cambio >= self.num_players - 1:
-                    self.phase = Phase.DONE
 
     def is_done(self) -> bool:
         return self.phase == Phase.DONE

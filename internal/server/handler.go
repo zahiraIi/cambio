@@ -5,9 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -22,27 +21,6 @@ var upgrader = websocket.Upgrader{
 type Handler struct {
 	Hub *Hub
 }
-
-// #region agent log
-func debugLog(hypothesisID, location, message string, data map[string]interface{}) {
-	f, err := os.OpenFile("/Users/zahir/cambio/.cursor/debug-1b9773.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	payload := map[string]interface{}{
-		"sessionId":    "1b9773",
-		"hypothesisId": hypothesisID,
-		"location":     location,
-		"message":      message,
-		"data":         data,
-		"timestamp":    time.Now().UnixMilli(),
-	}
-	b, _ := json.Marshal(payload)
-	_, _ = f.Write(append(b, '\n'))
-}
-
-// #endregion
 
 func NewHandler(hub *Hub) *Handler {
 	return &Handler{Hub: hub}
@@ -163,12 +141,6 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	playerID := r.URL.Query().Get("playerId")
 	playerName := r.URL.Query().Get("playerName")
 
-	// #region agent log
-	debugLog("A", "handler.go:handleWebSocket", "WS connect attempt", map[string]interface{}{
-		"gameId": gameID, "playerId": playerID, "playerName": playerName,
-	})
-	// #endregion
-
 	if gameID == "" || playerID == "" {
 		http.Error(w, "gameId and playerId required", http.StatusBadRequest)
 		return
@@ -179,9 +151,6 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	room := h.Hub.GetGame(gameID)
 	if room == nil {
-		// #region agent log
-		debugLog("A", "handler.go:handleWebSocket", "game not found", map[string]interface{}{"gameId": gameID})
-		// #endregion
 		http.Error(w, "game not found", http.StatusNotFound)
 		return
 	}
@@ -197,12 +166,6 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	room.RegisterClient(client)
 
 	addErr := room.Engine.AddPlayer(playerID, playerName)
-	// #region agent log
-	debugLog("B", "handler.go:handleWebSocket", "AddPlayer result", map[string]interface{}{
-		"gameId": gameID, "playerId": playerID, "phase": room.Engine.PublicPhase(),
-		"addErr": fmt.Sprintf("%v", addErr), "alreadyIn": errors.Is(addErr, game.ErrPlayerAlreadyInGame),
-	})
-	// #endregion
 	if addErr != nil && !errors.Is(addErr, game.ErrPlayerAlreadyInGame) {
 		client.Send(map[string]interface{}{"type": "error", "error": addErr.Error()})
 		room.UnregisterClient(playerID, client)
@@ -225,11 +188,6 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			// #region agent log
-			debugLog("E", "handler.go:handleWebSocket", "read error disconnect", map[string]interface{}{
-				"gameId": gameID, "playerId": playerID, "err": err.Error(),
-			})
-			// #endregion
 			log.Printf("read error: %v", err)
 			if room.UnregisterClient(playerID, client) && room.Engine.PublicPhase() == "waiting" {
 				_ = room.Engine.RemovePlayer(playerID)
@@ -360,7 +318,7 @@ func (h *Handler) pumpBots(room *GameRoom) {
 				return
 			}
 			delay := room.Engine.CurrentBotThinkDelay()
-			jitter := rand.Intn(900) + 300
+			jitter := rand.IntN(900) + 300
 			time.Sleep(time.Duration(delay+jitter) * time.Millisecond)
 			act, ok := room.Engine.BotChooseAction(botID)
 			if !ok {

@@ -1,35 +1,11 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
-	"time"
 
 	"github.com/zahir/cambio/internal/game"
 )
-
-// #region agent log
-func debugLogRoom(hypothesisID, location, message string, data map[string]interface{}) {
-	f, err := os.OpenFile("/Users/zahir/cambio/.cursor/debug-1b9773.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	payload := map[string]interface{}{
-		"sessionId":    "1b9773",
-		"hypothesisId": hypothesisID,
-		"location":     location,
-		"message":      message,
-		"data":         data,
-		"timestamp":    time.Now().UnixMilli(),
-	}
-	b, _ := json.Marshal(payload)
-	_, _ = f.Write(append(b, '\n'))
-}
-
-// #endregion
 
 type Hub struct {
 	mu    sync.RWMutex
@@ -98,12 +74,7 @@ func (h *Hub) ListGames() []map[string]interface{} {
 }
 
 func (room *GameRoom) LobbyPayload() map[string]interface{} {
-	names := make([]string, 0, len(room.Engine.Players))
-	for _, p := range room.Engine.Players {
-		if !p.IsBot {
-			names = append(names, p.Name)
-		}
-	}
+	names := room.Engine.PlayerNames()
 	room.mu.Lock()
 	onlineCount := len(room.Clients)
 	room.mu.Unlock()
@@ -121,11 +92,6 @@ func (room *GameRoom) RegisterClient(client *Client) *Client {
 	room.mu.Lock()
 	defer room.mu.Unlock()
 	if prev, ok := room.Clients[client.PlayerID]; ok && prev != client {
-		// #region agent log
-		debugLogRoom("D", "hub.go:RegisterClient", "closing previous client", map[string]interface{}{
-			"playerId": client.PlayerID, "gameId": client.GameID,
-		})
-		// #endregion
 		go prev.Conn.Close()
 	}
 	room.Clients[client.PlayerID] = client

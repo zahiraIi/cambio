@@ -179,7 +179,10 @@ func (e *Engine) ForceSkipAbility() []Event {
 	e.PendingAbility = NoAbility
 	e.PeekOpponentRemaining = 0
 	e.advanceTurn()
-	return e.Events[start:]
+	newEvents := make([]Event, len(e.Events)-start)
+	copy(newEvents, e.Events[start:])
+	e.Events = e.Events[:0]
+	return newEvents
 }
 
 func (e *Engine) Start() error {
@@ -259,7 +262,10 @@ func (e *Engine) Execute(action Action) ([]Event, error) {
 		return nil, err
 	}
 
-	return e.Events[startIdx:], nil
+	newEvents := make([]Event, len(e.Events)-startIdx)
+	copy(newEvents, e.Events[startIdx:])
+	e.Events = e.Events[:0]
+	return newEvents, nil
 }
 
 func (e *Engine) handleInitPeek(a Action) error {
@@ -871,6 +877,19 @@ func (e *Engine) PlayerCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.Players)
+}
+
+// PlayerNames returns the display names of non-bot players (thread-safe).
+func (e *Engine) PlayerNames() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	names := make([]string, 0, len(e.Players))
+	for _, p := range e.Players {
+		if !p.IsBot {
+			names = append(names, p.Name)
+		}
+	}
+	return names
 }
 
 // PublicPhase returns the current phase as a string.

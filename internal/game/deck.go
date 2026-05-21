@@ -29,8 +29,9 @@ func (d *Deck) Draw() (Card, bool) {
 	if len(d.Cards) == 0 {
 		return Card{}, false
 	}
-	card := d.Cards[0]
-	d.Cards = d.Cards[1:]
+	last := len(d.Cards) - 1
+	card := d.Cards[last]
+	d.Cards = d.Cards[:last]
 	return card, true
 }
 

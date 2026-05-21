@@ -108,12 +108,10 @@ def train(
         if self_play:
             opponent.finish_episode()
 
-        agent_pidx = 1 if ep % 2 == 0 else 0
-        # Find which index in player_map has value 0 (the learning agent)
-        agent_pidx_actual = 0 if player_map[0] == 0 else 1
+        agent_pidx = 0 if player_map[0] == 0 else 1
 
-        agent_score = sim.players[agent_pidx_actual].score()
-        opp_score = sim.players[1 - agent_pidx_actual].score()
+        agent_score = sim.players[agent_pidx].score()
+        opp_score = sim.players[1 - agent_pidx].score()
         won = agent_score <= opp_score
 
         win_history.append(1.0 if won else 0.0)
