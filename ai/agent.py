@@ -2,11 +2,7 @@
 
 import numpy as np
 from neural_net import NeuralNet, ActivationFn
-from game_sim import CambioSim, NUM_ACTIONS
-
-
-OBS_SIZE = 32
-HIDDEN_SIZE = 128
+from policy_spec import NUM_ACTIONS, OBS_SIZE, HIDDEN_SIZE, VALUE_HIDDEN
 
 
 class CambioAgent:
@@ -16,7 +12,7 @@ class CambioAgent:
             ["relu", "relu", "softmax"],
         )
         self.value_net = NeuralNet(
-            [OBS_SIZE, HIDDEN_SIZE, 64, 1],
+            [OBS_SIZE, HIDDEN_SIZE, VALUE_HIDDEN, 1],
             ["relu", "relu", "linear"],
         )
         self.lr = lr

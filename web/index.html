@@ -128,24 +128,26 @@
             <div id="abilityPrompt" class="ability-overlay hidden">
                 <div class="ability-card">
                     <p id="abilityText"></p>
-                    <button type="button" id="abilitySkipBtn" class="btn btn-small btn-secondary">Skip</button>
+                    <div class="ability-actions">
+                        <button type="button" id="abilityConfirmBtn" class="btn btn-small btn-primary hidden">Swap</button>
+                        <button type="button" id="abilitySkipBtn" class="btn btn-small btn-secondary hidden">Keep</button>
+                    </div>
                 </div>
             </div>
 
             <div id="cardFlyLayer" class="card-fly-layer" aria-hidden="true"></div>
             <div id="toastStack" class="toast-stack" aria-live="polite"></div>
-        </div>
 
-        <!-- Scores -->
-        <div id="scores" class="screen scores-screen">
-            <div class="scores-center">
-                <div id="winnerAnnounce" class="winner-announce">
-                    <p class="winner-label">Winner</p>
-                    <h2 id="winnerName" class="winner-name"></h2>
-                    <p id="winnerScore" class="winner-score"></p>
+            <div id="scoresOverlay" class="scores-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="winnerName">
+                <div class="scores-overlay-panel">
+                    <div id="winnerAnnounce" class="winner-announce">
+                        <p class="winner-label">Winner</p>
+                        <h2 id="winnerName" class="winner-name"></h2>
+                        <p id="winnerScore" class="winner-score"></p>
+                    </div>
+                    <div id="scoreBoard" class="score-board"></div>
+                    <button type="button" class="btn btn-primary scores-play-again" onclick="location.href='/'">Play again</button>
                 </div>
-                <div id="scoreBoard" class="score-board"></div>
-                <button type="button" class="btn btn-primary scores-play-again" onclick="location.href='/'">Play again</button>
             </div>
         </div>
     </div>

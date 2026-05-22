@@ -4,9 +4,6 @@ import "math/rand/v2"
 
 // NextAutomaticBotID returns a bot player ID that should act next, or "".
 func (e *Engine) NextAutomaticBotID() string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
 	switch e.Phase {
 	case PhaseInitPeek:
 		for _, p := range e.Players {
@@ -50,7 +47,7 @@ func (e *Engine) NextAutomaticBotID() string {
 	return ""
 }
 
-// BotChooseAction picks a legal random action for the given bot (caller must hold no lock).
+// BotChooseAction picks an action for the given bot using the loaded policy or heuristics.
 func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -60,6 +57,20 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		return Action{}, false
 	}
 
+	if PolicyIsLoaded() && e.PendingAbility != LookAndSwitch {
+		obs := e.BuildBotObservation(botID)
+		valid := e.ValidBotActionIndices(botID)
+		if idx, ok := ChoosePolicyAction(obs, valid); ok {
+			if act, ok2 := e.ActionFromPolicyIndex(botID, idx); ok2 {
+				return act, true
+			}
+		}
+	}
+
+	return e.botChooseHeuristic(botID, bot)
+}
+
+func (e *Engine) botChooseHeuristic(botID string, bot *Player) (Action, bool) {
 	if e.Phase == PhaseInitPeek {
 		mask := e.InitPeekMask[botID]
 		if mask == 0b11 {
@@ -88,23 +99,12 @@ func (e *Engine) BotChooseAction(botID string) (Action, bool) {
 		if e.Players[e.CurrentTurn].ID != botID {
 			return Action{}, false
 		}
-		act, ok := e.botResolveAbility(botID, bot)
-		// #region agent log
-		agentDebugLog("A", "bot.go:BotChooseAction", "pending ability branch", map[string]interface{}{
-			"botID": botID, "pending": abilityName(e.PendingAbility), "actionType": int(act.Type), "ok": ok,
-		})
-		// #endregion
-		return act, ok
+		return e.botResolveAbility(botID, bot)
 	}
 
 	if !e.stackRankClaimed && e.openStackRank != 0 && e.StackWindowReadyForBots() {
 		for s := 0; s < HandSize; s++ {
 			if c := bot.Hand[s]; c != nil && c.Rank == e.openStackRank {
-				// #region agent log
-				agentDebugLog("A", "bot.go:BotChooseAction", "stack snap branch", map[string]interface{}{
-					"botID": botID, "slot": s, "openStackRank": int(e.openStackRank),
-				})
-				// #endregion
 				return Action{Type: ActionSnapMatch, PlayerID: botID, Slot: s}, true
 			}
 		}
@@ -227,36 +227,48 @@ func botPickBlindSwitch(e *Engine, botID string, bot *Player) (Action, bool) {
 }
 
 func botPickLookSwitch(e *Engine, botID string, bot *Player) (Action, bool) {
-	mySlots := slotsWithCards(bot)
-	if len(mySlots) == 0 {
-		return Action{}, false
-	}
-	var oppCandidates []struct {
-		p *Player
-		s []int
-	}
-	for _, p := range e.Players {
-		if p.ID == botID {
-			continue
+	if e.lookSwitchMySlot < 0 {
+		mySlots := slotsWithCards(bot)
+		if len(mySlots) == 0 {
+			return Action{}, false
 		}
-		ss := slotsWithCards(p)
-		if len(ss) > 0 {
-			oppCandidates = append(oppCandidates, struct {
-				p *Player
-				s []int
-			}{p, ss})
+		ms := mySlots[rand.IntN(len(mySlots))]
+		return Action{Type: ActionLookSwitchOwn, PlayerID: botID, Slot: ms}, true
+	}
+	if !e.lookSwitchPeekDone {
+		var oppCandidates []struct {
+			p *Player
+			s []int
 		}
+		for _, p := range e.Players {
+			if p.ID == botID {
+				continue
+			}
+			ss := slotsWithCards(p)
+			if len(ss) > 0 {
+				oppCandidates = append(oppCandidates, struct {
+					p *Player
+					s []int
+				}{p, ss})
+			}
+		}
+		if len(oppCandidates) == 0 {
+			return Action{}, false
+		}
+		ch := oppCandidates[rand.IntN(len(oppCandidates))]
+		ts := ch.s[rand.IntN(len(ch.s))]
+		return Action{
+			Type: ActionLookSwitchPeek, PlayerID: botID,
+			TargetID: ch.p.ID, TargetSlot: ts,
+		}, true
 	}
-	if len(oppCandidates) == 0 {
-		return Action{}, false
+	if rand.IntN(2) == 0 {
+		return Action{
+			Type: ActionLookAndSwitch, PlayerID: botID,
+			Slot: e.lookSwitchMySlot, TargetID: e.lookSwitchTargetID, TargetSlot: e.lookSwitchTargetSlot,
+		}, true
 	}
-	ch := oppCandidates[rand.IntN(len(oppCandidates))]
-	ms := mySlots[rand.IntN(len(mySlots))]
-	ts := ch.s[rand.IntN(len(ch.s))]
-	return Action{
-		Type: ActionLookAndSwitch, PlayerID: botID,
-		Slot: ms, TargetID: ch.p.ID, TargetSlot: ts,
-	}, true
+	return Action{Type: ActionDeclineSwitch, PlayerID: botID}, true
 }
 
 func slotsWithCards(p *Player) []int {

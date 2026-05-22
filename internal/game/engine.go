@@ -32,8 +32,10 @@ const (
 	ActionPeekOwn                         // ability: peek at own card (9/10)
 	ActionPeekOpponent                    // ability: peek at opponent's card (7/8)
 	ActionBlindSwitch                     // ability: swap cards blind (J/Q)
-	ActionLookAndSwitch                   // ability: look then optionally switch (Black King)
-	ActionDeclineSwitch                   // decline the switch after looking (Black King)
+	ActionLookAndSwitch                   // ability: confirm swap after looking (Black King)
+	ActionLookSwitchOwn                   // black king step 1: peek own card
+	ActionLookSwitchPeek                  // black king step 2: peek opponent card
+	ActionDeclineSwitch                   // black king step 3: keep without swapping
 	ActionCallCambio                      // call cambio to end round
 	ActionInitPeek                        // peek at starting cards
 	ActionSnapMatch                       // snap matching cards to discard pile
@@ -75,7 +77,7 @@ type Engine struct {
 	Events              []Event
 	maxPlayers          int
 
-	// Peek opponent ability (7 = 1 peek, 8 = 2 peeks) before advancing turn.
+	// Peek opponent ability (7 or 8): one peek at one opponent card before advancing turn.
 	PeekOpponentRemaining int
 
 	// peekKnowledge[viewer][target:slot] = remembered card with decaying strength
@@ -90,6 +92,12 @@ type Engine struct {
 	pendingStackGiveActor     string
 	pendingStackGiveTargetID  string
 	pendingStackGiveTargetSlot int
+
+	// Black king look-and-switch: peek own, peek opponent, then optional swap.
+	lookSwitchMySlot     int
+	lookSwitchTargetID   string
+	lookSwitchTargetSlot int
+	lookSwitchPeekDone   bool
 }
 
 type memoryEntry struct {
@@ -105,12 +113,15 @@ func NewEngine(id string, maxPlayers int) *Engine {
 		maxPlayers = 6
 	}
 	return &Engine{
-		ID:              id,
-		maxPlayers:      maxPlayers,
-		Phase:           PhaseWaiting,
-		CambioCallerIdx: -1,
-		InitPeekMask:    make(map[string]uint8),
-		peekKnowledge:   make(map[string]map[string]memoryEntry),
+		ID:                         id,
+		maxPlayers:                 maxPlayers,
+		Phase:                      PhaseWaiting,
+		CambioCallerIdx:            -1,
+		InitPeekMask:               make(map[string]uint8),
+		peekKnowledge:              make(map[string]map[string]memoryEntry),
+		lookSwitchMySlot:           -1,
+		lookSwitchTargetSlot:       -1,
+		pendingStackGiveTargetSlot: -1,
 	}
 }
 
@@ -187,45 +198,8 @@ func (e *Engine) ForceSkipStackGive() []Event {
 	if e.pendingStackGiveActor == "" {
 		return nil
 	}
-	actor := e.findPlayer(e.pendingStackGiveActor)
-	target := e.findPlayer(e.pendingStackGiveTargetID)
-	if actor == nil || target == nil {
-		e.pendingStackGiveActor = ""
-		e.pendingStackGiveTargetID = ""
-		e.pendingStackGiveTargetSlot = -1
-		return nil
-	}
-	ts := e.pendingStackGiveTargetSlot
-	var giveSlot int = -1
-	for s := 0; s < HandSize; s++ {
-		if actor.Hand[s] != nil {
-			giveSlot = s
-			break
-		}
-	}
-	if giveSlot < 0 || ts < 0 || ts >= HandSize || target.Hand[ts] != nil {
-		e.pendingStackGiveActor = ""
-		e.pendingStackGiveTargetID = ""
-		e.pendingStackGiveTargetSlot = -1
-		return nil
-	}
 	start := len(e.Events)
-	given := *actor.Hand[giveSlot]
-	e.invalidateKnowledgeForSlot(e.pendingStackGiveActor, giveSlot)
-	actor.Hand[giveSlot] = nil
-	actor.Known[giveSlot] = false
-	target.Hand[ts] = &given
-	target.Known[ts] = false
-	e.recordPeekKnowledge(e.pendingStackGiveActor, e.pendingStackGiveTargetID, ts, given.Rank)
-	e.pendingStackGiveActor = ""
-	e.pendingStackGiveTargetID = ""
-	e.pendingStackGiveTargetSlot = -1
-	e.emit(Event{
-		Type: "stack_give_complete", PlayerID: actor.ID,
-		Data: map[string]interface{}{
-			"mySlot": giveSlot, "targetPlayer": target.ID, "targetSlot": ts, "auto": true,
-		},
-	})
+	e.forceCompleteStackGiveLocked()
 	newEvents := make([]Event, len(e.Events)-start)
 	copy(newEvents, e.Events[start:])
 	e.Events = e.Events[:0]
@@ -242,11 +216,129 @@ func (e *Engine) ForceSkipAbility() []Event {
 	start := len(e.Events)
 	e.PendingAbility = NoAbility
 	e.PeekOpponentRemaining = 0
+	e.clearLookSwitchState()
 	e.advanceTurn()
 	newEvents := make([]Event, len(e.Events)-start)
 	copy(newEvents, e.Events[start:])
 	e.Events = e.Events[:0]
 	return newEvents
+}
+
+// ForceAdvanceBotTurn completes the current bot's turn when normal actions fail (bot fallback).
+func (e *Engine) ForceAdvanceBotTurn() []Event {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.Phase != PhaseTurns && e.Phase != PhaseFinalRound {
+		return nil
+	}
+	if len(e.Players) == 0 || e.CurrentTurn < 0 || e.CurrentTurn >= len(e.Players) {
+		return nil
+	}
+	cur := e.Players[e.CurrentTurn]
+	if !cur.IsBot {
+		return nil
+	}
+	start := len(e.Events)
+
+	if e.pendingStackGiveActor != "" {
+		e.forceCompleteStackGiveLocked()
+	}
+	if e.PendingAbility != NoAbility {
+		e.PendingAbility = NoAbility
+		e.PeekOpponentRemaining = 0
+		e.clearLookSwitchState()
+	}
+	if e.DrawnCard != nil {
+		returned := *e.DrawnCard
+		e.DiscardPile = append(e.DiscardPile, returned)
+		e.DrawnCard = nil
+		e.emit(Event{
+			Type: "card_returned", PlayerID: cur.ID,
+			Data: map[string]interface{}{"card": returned.String(), "auto": true},
+		})
+		e.openStackWindow(returned.Rank)
+		e.advanceTurn()
+		newEvents := make([]Event, len(e.Events)-start)
+		copy(newEvents, e.Events[start:])
+		e.Events = e.Events[:0]
+		return newEvents
+	}
+
+	card, ok := e.Deck.Draw()
+	if !ok {
+		e.reshuffleDiscard()
+		card, ok = e.Deck.Draw()
+	}
+	if !ok {
+		e.advanceTurn()
+		e.emit(Event{
+			Type: "bot_turn_skipped", PlayerID: cur.ID,
+			Data: map[string]string{"message": "Bot turn auto-skipped (no cards left)"},
+		})
+		newEvents := make([]Event, len(e.Events)-start)
+		copy(newEvents, e.Events[start:])
+		e.Events = e.Events[:0]
+		return newEvents
+	}
+	e.DrawnCard = &card
+	returned := *e.DrawnCard
+	e.DiscardPile = append(e.DiscardPile, returned)
+	e.DrawnCard = nil
+	e.emit(Event{
+		Type: "card_returned", PlayerID: cur.ID,
+		Data: map[string]interface{}{"card": returned.String(), "auto": true},
+	})
+	e.openStackWindow(returned.Rank)
+	e.advanceTurn()
+
+	newEvents := make([]Event, len(e.Events)-start)
+	copy(newEvents, e.Events[start:])
+	e.Events = e.Events[:0]
+	return newEvents
+}
+
+func (e *Engine) forceCompleteStackGiveLocked() {
+	if e.pendingStackGiveActor == "" {
+		return
+	}
+	actor := e.findPlayer(e.pendingStackGiveActor)
+	target := e.findPlayer(e.pendingStackGiveTargetID)
+	if actor == nil || target == nil {
+		e.pendingStackGiveActor = ""
+		e.pendingStackGiveTargetID = ""
+		e.pendingStackGiveTargetSlot = -1
+		return
+	}
+	ts := e.pendingStackGiveTargetSlot
+	giveSlot := -1
+	for s := 0; s < HandSize; s++ {
+		if actor.Hand[s] != nil {
+			giveSlot = s
+			break
+		}
+	}
+	if giveSlot < 0 || ts < 0 || ts >= HandSize || target.Hand[ts] != nil {
+		e.pendingStackGiveActor = ""
+		e.pendingStackGiveTargetID = ""
+		e.pendingStackGiveTargetSlot = -1
+		return
+	}
+	given := *actor.Hand[giveSlot]
+	e.invalidateKnowledgeForSlot(e.pendingStackGiveActor, giveSlot)
+	actor.Hand[giveSlot] = nil
+	actor.Known[giveSlot] = false
+	target.Hand[ts] = &given
+	target.Known[ts] = false
+	e.recordPeekKnowledge(e.pendingStackGiveActor, e.pendingStackGiveTargetID, ts, given.Rank)
+	e.pendingStackGiveActor = ""
+	e.pendingStackGiveTargetID = ""
+	e.pendingStackGiveTargetSlot = -1
+	e.emit(Event{
+		Type: "stack_give_complete", PlayerID: actor.ID,
+		Data: map[string]interface{}{
+			"mySlot": giveSlot, "targetPlayer": target.ID, "targetSlot": ts, "auto": true,
+		},
+	})
 }
 
 func (e *Engine) Start() error {
@@ -310,6 +402,10 @@ func (e *Engine) Execute(action Action) ([]Event, error) {
 		err = e.handleBlindSwitch(action)
 	case ActionLookAndSwitch:
 		err = e.handleLookAndSwitch(action)
+	case ActionLookSwitchOwn:
+		err = e.handleLookSwitchOwn(action)
+	case ActionLookSwitchPeek:
+		err = e.handleLookSwitchPeek(action)
 	case ActionDeclineSwitch:
 		err = e.handleDeclineSwitch(action)
 	case ActionCallCambio:
@@ -486,17 +582,13 @@ func (e *Engine) handleDiscard(a Action) error {
 
 	if ability != NoAbility {
 		e.PendingAbility = ability
+		if ability == LookAndSwitch {
+			e.clearLookSwitchState()
+		}
 		data := map[string]interface{}{"ability": abilityName(ability)}
 		if ability == PeekOpponent {
-			switch discarded.Rank {
-			case Eight:
-				e.PeekOpponentRemaining = 2
-			case Seven:
-				e.PeekOpponentRemaining = 1
-			default:
-				e.PeekOpponentRemaining = 1
-			}
-			data["peekOpponentRemaining"] = e.PeekOpponentRemaining
+			e.PeekOpponentRemaining = 1
+			data["peekOpponentRemaining"] = 1
 		}
 		e.emit(Event{
 			Type: "ability_available", PlayerID: a.PlayerID,
@@ -649,26 +741,69 @@ func (e *Engine) handleBlindSwitch(a Action) error {
 	return nil
 }
 
-func (e *Engine) handleLookAndSwitch(a Action) error {
+func (e *Engine) clearLookSwitchState() {
+	e.lookSwitchMySlot = -1
+	e.lookSwitchTargetID = ""
+	e.lookSwitchTargetSlot = -1
+	e.lookSwitchPeekDone = false
+}
+
+func (e *Engine) handleLookSwitchOwn(a Action) error {
 	if err := e.validateTurn(a.PlayerID); err != nil {
 		return err
 	}
 	if e.PendingAbility != LookAndSwitch {
 		return fmt.Errorf("no look-and-switch ability pending")
 	}
+	if e.lookSwitchMySlot >= 0 {
+		return fmt.Errorf("already picked your card to look at")
+	}
 	player := e.findPlayer(a.PlayerID)
-	target := e.findPlayer(a.TargetID)
-	if player == nil || target == nil {
+	if player == nil {
 		return fmt.Errorf("player not found")
 	}
-	if a.Slot < 0 || a.Slot >= HandSize || a.TargetSlot < 0 || a.TargetSlot >= HandSize {
-		return fmt.Errorf("invalid card slots")
+	if a.Slot < 0 || a.Slot >= HandSize || player.Hand[a.Slot] == nil {
+		return fmt.Errorf("invalid card slot")
 	}
-	if player.Hand[a.Slot] == nil || target.Hand[a.TargetSlot] == nil {
-		return fmt.Errorf("invalid card slots")
+	card, err := player.PeekCard(a.Slot)
+	if err != nil {
+		return err
 	}
+	e.recordPeekKnowledge(a.PlayerID, a.PlayerID, a.Slot, card.Rank)
+	e.lookSwitchMySlot = a.Slot
+	e.emit(Event{
+		Type: "look_switch_own_peeked", PlayerID: a.PlayerID, Private: true,
+		VisibleTo: []string{a.PlayerID},
+		Data:      map[string]interface{}{"slot": a.Slot, "card": card.String(), "points": card.Points()},
+	})
+	return nil
+}
 
+func (e *Engine) handleLookSwitchPeek(a Action) error {
+	if err := e.validateTurn(a.PlayerID); err != nil {
+		return err
+	}
+	if e.PendingAbility != LookAndSwitch {
+		return fmt.Errorf("no look-and-switch ability pending")
+	}
+	if e.lookSwitchMySlot < 0 {
+		return fmt.Errorf("pick one of your cards to look at first")
+	}
+	if e.lookSwitchPeekDone {
+		return fmt.Errorf("already looked at an opponent card")
+	}
+	target := e.findPlayer(a.TargetID)
+	if target == nil || a.TargetID == a.PlayerID {
+		return fmt.Errorf("invalid target")
+	}
+	if a.TargetSlot < 0 || a.TargetSlot >= HandSize || target.Hand[a.TargetSlot] == nil {
+		return fmt.Errorf("invalid target slot")
+	}
 	card := *target.Hand[a.TargetSlot]
+	e.lookSwitchTargetID = a.TargetID
+	e.lookSwitchTargetSlot = a.TargetSlot
+	e.lookSwitchPeekDone = true
+	e.recordPeekKnowledge(a.PlayerID, a.TargetID, a.TargetSlot, card.Rank)
 	e.emit(Event{
 		Type: "looked_at_card", PlayerID: a.PlayerID, Private: true,
 		VisibleTo: []string{a.PlayerID},
@@ -677,6 +812,37 @@ func (e *Engine) handleLookAndSwitch(a Action) error {
 			"card": card.String(), "points": card.Points(), "rank": int(card.Rank),
 		},
 	})
+	e.emit(Event{
+		Type: "look_switch_ready", PlayerID: a.PlayerID, Private: true,
+		VisibleTo: []string{a.PlayerID},
+		Data: map[string]interface{}{
+			"mySlot": e.lookSwitchMySlot, "targetPlayer": a.TargetID, "targetSlot": a.TargetSlot,
+		},
+	})
+	return nil
+}
+
+func (e *Engine) handleLookAndSwitch(a Action) error {
+	if err := e.validateTurn(a.PlayerID); err != nil {
+		return err
+	}
+	if e.PendingAbility != LookAndSwitch {
+		return fmt.Errorf("no look-and-switch ability pending")
+	}
+	if !e.lookSwitchPeekDone {
+		return fmt.Errorf("look at your card and an opponent card before swapping")
+	}
+	if a.Slot != e.lookSwitchMySlot || a.TargetID != e.lookSwitchTargetID || a.TargetSlot != e.lookSwitchTargetSlot {
+		return fmt.Errorf("invalid look-and-switch selection")
+	}
+	player := e.findPlayer(a.PlayerID)
+	target := e.findPlayer(a.TargetID)
+	if player == nil || target == nil {
+		return fmt.Errorf("player not found")
+	}
+	if player.Hand[a.Slot] == nil || target.Hand[a.TargetSlot] == nil {
+		return fmt.Errorf("invalid card slots")
+	}
 
 	myCard := player.Hand[a.Slot]
 	theirCard := target.Hand[a.TargetSlot]
@@ -689,10 +855,11 @@ func (e *Engine) handleLookAndSwitch(a Action) error {
 	target.Hand[a.TargetSlot] = myCard
 	target.Known[a.TargetSlot] = false
 
-	e.recordPeekKnowledge(a.PlayerID, a.PlayerID, a.Slot, card.Rank)
+	e.recordPeekKnowledge(a.PlayerID, a.PlayerID, a.Slot, theirCard.Rank)
 	e.recordPeekKnowledge(a.PlayerID, a.TargetID, a.TargetSlot, myCard.Rank)
 
 	e.PendingAbility = NoAbility
+	e.clearLookSwitchState()
 	e.emit(Event{
 		Type: "look_and_switched", PlayerID: a.PlayerID,
 		Data: map[string]interface{}{
@@ -710,12 +877,16 @@ func (e *Engine) handleDeclineSwitch(a Action) error {
 	if e.PendingAbility != LookAndSwitch {
 		return fmt.Errorf("no look-and-switch ability pending")
 	}
-	// Declined the switch after looking — must now blind switch with a different player
-	e.PendingAbility = BlindSwitch
+	if !e.lookSwitchPeekDone {
+		return fmt.Errorf("look at your card and an opponent card first")
+	}
+	e.PendingAbility = NoAbility
+	e.clearLookSwitchState()
 	e.emit(Event{
 		Type: "switch_declined", PlayerID: a.PlayerID,
-		Data: map[string]string{"nextAction": "blind_switch"},
+		Data: map[string]string{"message": "Kept cards without swapping"},
 	})
+	e.advanceTurn()
 	return nil
 }
 
@@ -988,6 +1159,15 @@ func (e *Engine) GetState(forPlayerID string) map[string]interface{} {
 		state["pendingStackGive"] = map[string]interface{}{
 			"targetId":   e.pendingStackGiveTargetID,
 			"targetSlot": e.pendingStackGiveTargetSlot,
+		}
+	}
+
+	if forPlayerID != "" && e.PendingAbility == LookAndSwitch && currentPlayerID == forPlayerID {
+		state["lookSwitch"] = map[string]interface{}{
+			"mySlot":     e.lookSwitchMySlot,
+			"targetId":   e.lookSwitchTargetID,
+			"targetSlot": e.lookSwitchTargetSlot,
+			"peekDone":   e.lookSwitchPeekDone,
 		}
 	}
 

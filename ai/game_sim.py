@@ -1,12 +1,32 @@
 """Pure-Python Cambio game simulator for self-play training.
 
-Mirrors the Go engine rules exactly so the AI trains on the real game.
+Mirrors the Go engine rules including stack/snap and peek memory.
 """
 
 import random
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Optional
+
+from policy_spec import (
+    HAND_SIZE,
+    MAX_OPPONENTS,
+    NUM_ACTIONS,
+    OBS_SIZE,
+    POLICY_ACT_CALL_CAMBIO,
+    POLICY_ACT_DECLINE_SW,
+    POLICY_ACT_DISCARD,
+    POLICY_ACT_DRAW_DECK,
+    POLICY_ACT_DRAW_DISCARD,
+    POLICY_ACT_PEEK_OPP_BASE,
+    POLICY_ACT_PEEK_OWN_BASE,
+    POLICY_ACT_SNAP_BASE,
+    POLICY_ACT_STACK_GIVE_BASE,
+    POLICY_ACT_STACK_OPP_BASE,
+    POLICY_ACT_SWAP_BASE,
+    POLICY_ACT_SWITCH_BASE,
+    STACK_MEMORY_MIN,
+)
 
 
 class Suit(IntEnum):
@@ -36,10 +56,10 @@ class Rank(IntEnum):
 
 class Ability(IntEnum):
     NONE = 0
-    PEEK_OPPONENT = 1  # 7, 8
-    PEEK_OWN = 2       # 9, 10
-    BLIND_SWITCH = 3   # J, Q
-    LOOK_SWITCH = 4    # Black King
+    PEEK_OPPONENT = 1
+    PEEK_OWN = 2
+    BLIND_SWITCH = 3
+    LOOK_SWITCH = 4
 
 
 @dataclass
@@ -71,19 +91,10 @@ class Card:
         return Ability.NONE
 
 
-HAND_SIZE = 4
-
-# Action space for the AI (discrete)
-# 0: draw from deck
-# 1: draw from discard
-# 2-5: swap drawn card with hand slot 0-3
-# 6: discard drawn card
-# 7-10: peek own slot 0-3 (ability)
-# 11-14: peek opponent slot 0-3 (ability, uses first non-self opponent)
-# 15-18: blind switch my slot 0-3 with opponent (picks opponent slot greedily)
-# 19: call cambio
-# 20: decline switch (Black King)
-NUM_ACTIONS = 21
+@dataclass
+class MemoryEntry:
+    rank: Rank
+    strength: float
 
 
 @dataclass
@@ -91,6 +102,8 @@ class PlayerState:
     hand: list = field(default_factory=list)
     known: list = field(default_factory=lambda: [False] * HAND_SIZE)
     called_cambio: bool = False
+    memory_decay: float = 0.85
+    init_peek_mask: int = 0
 
     def score(self) -> int:
         return sum(c.points() for c in self.hand if c is not None)
@@ -103,10 +116,14 @@ class Phase(IntEnum):
     DONE = 3
 
 
-class CambioSim:
-    """Lightweight Cambio simulator for training."""
+INIT_PEEK_SLOT_MIN = 0
+INIT_PEEK_SLOT_MAX = 1
 
-    def __init__(self, num_players=2):
+
+class CambioSim:
+    """Cambio simulator for training — mirrors Go engine stack/peek rules."""
+
+    def __init__(self, num_players=4):
         self.num_players = num_players
         self.players: list[PlayerState] = []
         self.deck: list[Card] = []
@@ -115,9 +132,20 @@ class CambioSim:
         self.current_turn = 0
         self.drawn_card: Optional[Card] = None
         self.pending_ability = Ability.NONE
+        self.peek_opponent_remaining = 0
         self.cambio_caller = -1
         self.turns_after_cambio = 0
-        self.init_peeks_left: list[int] = []
+        self.skip_final_round_count = False
+        self.peek_knowledge: dict[int, dict[str, MemoryEntry]] = {}
+        self.open_stack_rank: Optional[Rank] = None
+        self.stack_rank_claimed = False
+        self.pending_stack_give_actor = -1
+        self.pending_stack_give_target = -1
+        self.pending_stack_give_target_slot = -1
+        self.look_switch_my_slot = -1
+        self.look_switch_target = -1
+        self.look_switch_target_slot = -1
+        self.look_switch_peek_done = False
         self.reset()
 
     def reset(self):
@@ -133,22 +161,101 @@ class CambioSim:
         for p in self.players:
             p.hand = [self.deck.pop() for _ in range(HAND_SIZE)]
             p.known = [False] * HAND_SIZE
+            p.called_cambio = False
+            p.init_peek_mask = 0
 
         self.discard = [self.deck.pop()]
         self.phase = Phase.INIT_PEEK
         self.current_turn = 0
         self.drawn_card = None
         self.pending_ability = Ability.NONE
+        self.peek_opponent_remaining = 0
         self.cambio_caller = -1
         self.turns_after_cambio = 0
-        self.init_peeks_left = [2] * self.num_players
+        self.skip_final_round_count = False
+        self.peek_knowledge = {i: {} for i in range(self.num_players)}
+        self.open_stack_rank = None
+        self.stack_rank_claimed = False
+        self.pending_stack_give_actor = -1
+        self.pending_stack_give_target = -1
+        self.pending_stack_give_target_slot = -1
+        self.look_switch_my_slot = -1
+        self.look_switch_target = -1
+        self.look_switch_target_slot = -1
+        self.look_switch_peek_done = False
 
-    def observe(self, player_idx: int):
-        """Build observation vector for a player. Returns numpy-compatible list."""
+    def _mem_key(self, target_idx: int, slot: int) -> str:
+        return f"{target_idx}:{slot}"
+
+    def _record_peek(self, viewer_idx: int, target_idx: int, slot: int, rank: Rank):
+        mem = self.peek_knowledge.setdefault(viewer_idx, {})
+        key = self._mem_key(target_idx, slot)
+        prev = mem.get(key)
+        strength = 1.0
+        if prev and prev.strength > strength:
+            strength = prev.strength
+        mem[key] = MemoryEntry(rank=rank, strength=strength)
+
+    def _get_peek(self, viewer_idx: int, target_idx: int, slot: int):
+        mem = self.peek_knowledge.get(viewer_idx, {})
+        entry = mem.get(self._mem_key(target_idx, slot))
+        if not entry or entry.strength < 0.12:
+            return None, 0.0, False
+        return entry.rank, entry.strength, True
+
+    def _invalidate_slot(self, target_idx: int, slot: int):
+        key = self._mem_key(target_idx, slot)
+        for mem in self.peek_knowledge.values():
+            mem.pop(key, None)
+
+    def _decay_memories(self):
+        for viewer_idx, mem in self.peek_knowledge.items():
+            decay = self.players[viewer_idx].memory_decay
+            dead = []
+            for key, entry in mem.items():
+                entry.strength *= decay
+                if entry.strength < 0.12:
+                    dead.append(key)
+            for key in dead:
+                del mem[key]
+
+    def _open_stack_window(self, rank: Rank):
+        self.open_stack_rank = rank
+        self.stack_rank_claimed = False
+
+    def _opponent_indices(self, player_idx: int) -> list[int]:
+        return [i for i in range(self.num_players) if i != player_idx]
+
+    def _opp_rel_idx(self, player_idx: int, target_idx: int) -> int:
+        opps = self._opponent_indices(player_idx)
+        return opps.index(target_idx)
+
+    def _draw_from_deck(self) -> Optional[Card]:
+        if self.deck:
+            return self.deck.pop()
+        if len(self.discard) > 1:
+            top = self.discard.pop()
+            self.deck = self.discard[:]
+            random.shuffle(self.deck)
+            self.discard = [top]
+            return self.deck.pop() if self.deck else None
+        return None
+
+    def _apply_penalty(self, player_idx: int):
+        card = self._draw_from_deck()
+        if card is None:
+            return
         p = self.players[player_idx]
-        obs = []
+        for i in range(HAND_SIZE):
+            if p.hand[i] is None:
+                p.hand[i] = card
+                p.known[i] = False
+                return
 
-        # Own hand: for each slot, [known, points_if_known, has_card]
+    def observe(self, player_idx: int) -> list[float]:
+        p = self.players[player_idx]
+        obs: list[float] = []
+
         for i in range(HAND_SIZE):
             card = p.hand[i]
             has_card = 1.0 if card is not None else 0.0
@@ -156,15 +263,16 @@ class CambioSim:
             pts = card.points() / 13.0 if (p.known[i] and card is not None) else 0.0
             obs.extend([has_card, known, pts])
 
-        # Known score estimate (known cards + average estimate for unknown)
-        known_total = sum(p.hand[i].points() for i in range(HAND_SIZE)
-                         if p.known[i] and p.hand[i] is not None)
-        known_count = sum(1 for i in range(HAND_SIZE) if p.known[i] and p.hand[i] is not None)
-        unknown_count = sum(1 for i in range(HAND_SIZE) if not p.known[i] and p.hand[i] is not None)
-        estimated_score = known_total + unknown_count * 5.5  # average card ~5.5
-        obs.append(estimated_score / 40.0)
+        unknown_count = sum(
+            1 for i in range(HAND_SIZE) if not p.known[i] and p.hand[i] is not None
+        )
+        known_total = sum(
+            p.hand[i].points()
+            for i in range(HAND_SIZE)
+            if p.known[i] and p.hand[i] is not None
+        )
+        obs.append((known_total + unknown_count * 5.5) / 40.0)
 
-        # Discard top card info
         if self.discard:
             top = self.discard[-1]
             obs.append(top.points() / 13.0)
@@ -172,129 +280,226 @@ class CambioSim:
         else:
             obs.extend([0.0, 0.0])
 
-        # Drawn card info
         if self.drawn_card is not None:
-            obs.append(1.0)
-            obs.append(self.drawn_card.points() / 13.0)
+            obs.extend([1.0, self.drawn_card.points() / 13.0])
         else:
             obs.extend([0.0, 0.0])
 
-        # Game phase
         obs.append(float(self.phase) / 3.0)
         obs.append(1.0 if self.current_turn == player_idx else 0.0)
         obs.append(float(self.pending_ability) / 4.0)
         obs.append(1.0 if self.cambio_caller >= 0 else 0.0)
 
-        # Opponent card counts
-        for i in range(self.num_players):
-            if i != player_idx:
-                opp = self.players[i]
-                card_count = sum(1 for c in opp.hand if c is not None)
-                obs.append(card_count / 4.0)
+        obs.append(
+            float(self.open_stack_rank) / 13.0 if self.open_stack_rank else 0.0
+        )
+        obs.append(1.0 if self.stack_rank_claimed else 0.0)
+        obs.append(1.0 if self.open_stack_rank and not self.stack_rank_claimed else 0.0)
 
-        # Deck remaining (normalized)
+        opps = self._opponent_indices(player_idx)
+        for rel in range(MAX_OPPONENTS):
+            if rel < len(opps):
+                opp_idx = opps[rel]
+                for slot in range(HAND_SIZE):
+                    rank, strength, ok = self._get_peek(player_idx, opp_idx, slot)
+                    obs.append(
+                        (float(rank) / 13.0) * strength if ok else 0.0
+                    )
+            else:
+                obs.extend([0.0] * HAND_SIZE)
+
+        for rel in range(MAX_OPPONENTS):
+            if rel < len(opps):
+                opp = self.players[opps[rel]]
+                count = sum(1 for c in opp.hand if c is not None)
+                obs.append(count / 4.0)
+            else:
+                obs.append(0.0)
+
         obs.append(len(self.deck) / 54.0)
 
-        # Pad to fixed size
-        while len(obs) < 32:
+        while len(obs) < OBS_SIZE:
             obs.append(0.0)
+        return obs[:OBS_SIZE]
 
-        return obs[:32]
+    def next_actor(self) -> int:
+        """Return player index that should act next, or -1."""
+        if self.phase == Phase.DONE:
+            return -1
+
+        if self.phase == Phase.INIT_PEEK:
+            for i, p in enumerate(self.players):
+                if p.init_peek_mask != 0b11:
+                    return i
+            return -1
+
+        if self.pending_stack_give_actor >= 0:
+            return self.pending_stack_give_actor
+
+        if self.pending_ability != Ability.NONE:
+            return self.current_turn
+
+        if (
+            not self.stack_rank_claimed
+            and self.open_stack_rank
+            and self.phase in (Phase.TURNS, Phase.FINAL_ROUND)
+        ):
+            for i, p in enumerate(self.players):
+                for s in range(HAND_SIZE):
+                    c = p.hand[s]
+                    if c is not None and c.rank == self.open_stack_rank:
+                        return i
+
+        if self.phase in (Phase.TURNS, Phase.FINAL_ROUND):
+            return self.current_turn
+
+        return -1
 
     def valid_actions(self, player_idx: int) -> list[int]:
-        """Return list of valid action indices."""
-        valid = []
+        if player_idx < 0:
+            return []
+
         p = self.players[player_idx]
 
         if self.phase == Phase.INIT_PEEK:
-            if self.init_peeks_left[player_idx] > 0:
-                for i in range(HAND_SIZE):
-                    if p.hand[i] is not None and not p.known[i]:
-                        valid.append(7 + i)  # peek own
-            return valid if valid else [7]
+            valid = []
+            for s in range(INIT_PEEK_SLOT_MIN, INIT_PEEK_SLOT_MAX + 1):
+                bit = 1 << s
+                if (p.init_peek_mask & bit) == 0 and p.hand[s] is not None:
+                    valid.append(POLICY_ACT_PEEK_OWN_BASE + s)
+            return valid
 
         if self.phase == Phase.DONE:
             return []
 
+        if self.pending_stack_give_actor == player_idx:
+            return [
+                POLICY_ACT_STACK_GIVE_BASE + s
+                for s in range(HAND_SIZE)
+                if p.hand[s] is not None
+            ]
+
+        if self.pending_ability != Ability.NONE:
+            if self.current_turn != player_idx:
+                return []
+            if self.pending_ability == Ability.PEEK_OWN:
+                return [
+                    POLICY_ACT_PEEK_OWN_BASE + s
+                    for s in range(HAND_SIZE)
+                    if p.hand[s] is not None
+                ]
+            if self.pending_ability == Ability.PEEK_OPPONENT:
+                return list(range(POLICY_ACT_PEEK_OPP_BASE, POLICY_ACT_PEEK_OPP_BASE + HAND_SIZE))
+            if self.pending_ability == Ability.BLIND_SWITCH:
+                return [
+                    POLICY_ACT_SWITCH_BASE + s
+                    for s in range(HAND_SIZE)
+                    if p.hand[s] is not None
+                ]
+            if self.pending_ability == Ability.LOOK_SWITCH:
+                if self.look_switch_my_slot < 0:
+                    return [
+                        POLICY_ACT_SWITCH_BASE + s
+                        for s in range(HAND_SIZE)
+                        if p.hand[s] is not None
+                    ]
+                if not self.look_switch_peek_done:
+                    return list(range(POLICY_ACT_PEEK_OPP_BASE, POLICY_ACT_PEEK_OPP_BASE + HAND_SIZE))
+                return [POLICY_ACT_DECLINE_SW, POLICY_ACT_SWITCH_BASE + self.look_switch_my_slot]
+
+        if (
+            not self.stack_rank_claimed
+            and self.open_stack_rank
+            and self.phase in (Phase.TURNS, Phase.FINAL_ROUND)
+        ):
+            snap_valid = []
+            for s in range(HAND_SIZE):
+                c = p.hand[s]
+                if c is not None and c.rank == self.open_stack_rank:
+                    if player_idx == self.current_turn and self.drawn_card is not None:
+                        continue
+                    snap_valid.append(POLICY_ACT_SNAP_BASE + s)
+            if snap_valid:
+                return snap_valid
+
         if self.current_turn != player_idx:
             return []
 
-        if self.pending_ability == Ability.PEEK_OWN:
-            for i in range(HAND_SIZE):
-                if p.hand[i] is not None:
-                    valid.append(7 + i)
-            return valid
-
-        if self.pending_ability == Ability.PEEK_OPPONENT:
-            for i in range(HAND_SIZE):
-                valid.append(11 + i)
-            return valid
-
-        if self.pending_ability == Ability.BLIND_SWITCH:
-            for i in range(HAND_SIZE):
-                if p.hand[i] is not None:
-                    valid.append(15 + i)
-            return valid
-
-        if self.pending_ability == Ability.LOOK_SWITCH:
-            for i in range(HAND_SIZE):
-                if p.hand[i] is not None:
-                    valid.append(15 + i)
-            valid.append(20)  # decline
-            return valid
-
         if self.drawn_card is not None:
-            for i in range(HAND_SIZE):
-                if p.hand[i] is not None:
-                    valid.append(2 + i)  # swap
-            valid.append(6)  # discard
+            valid = [POLICY_ACT_DISCARD]
+            for s in range(HAND_SIZE):
+                if p.hand[s] is not None:
+                    valid.append(POLICY_ACT_SWAP_BASE + s)
             return valid
 
-        # No drawn card yet
-        valid.append(0)  # draw deck
+        valid = [POLICY_ACT_DRAW_DECK]
         if self.discard:
-            valid.append(1)  # draw discard
+            valid.append(POLICY_ACT_DRAW_DISCARD)
         if self.phase == Phase.TURNS:
-            valid.append(19)  # call cambio
+            valid.append(POLICY_ACT_CALL_CAMBIO)
+
+        if (
+            not self.stack_rank_claimed
+            and self.open_stack_rank
+        ):
+            opps = self._opponent_indices(player_idx)
+            for rel, opp_idx in enumerate(opps[:MAX_OPPONENTS]):
+                for slot in range(HAND_SIZE):
+                    if self.players[opp_idx].hand[slot] is None:
+                        continue
+                    rank, strength, ok = self._get_peek(player_idx, opp_idx, slot)
+                    if (
+                        ok
+                        and strength >= STACK_MEMORY_MIN
+                        and rank == self.open_stack_rank
+                    ):
+                        valid.append(POLICY_ACT_STACK_OPP_BASE + rel * HAND_SIZE + slot)
+
         return valid
 
     def step(self, player_idx: int, action: int) -> float:
-        """Execute an action. Returns immediate reward."""
         p = self.players[player_idx]
 
-        # Init peek phase
         if self.phase == Phase.INIT_PEEK:
-            slot = action - 7
-            if 0 <= slot < HAND_SIZE and p.hand[slot] is not None:
+            slot = action - POLICY_ACT_PEEK_OWN_BASE
+            if INIT_PEEK_SLOT_MIN <= slot <= INIT_PEEK_SLOT_MAX and p.hand[slot] is not None:
                 p.known[slot] = True
-                self.init_peeks_left[player_idx] -= 1
-
-            if all(left <= 0 for left in self.init_peeks_left):
+                p.init_peek_mask |= 1 << slot
+                self._record_peek(player_idx, player_idx, slot, p.hand[slot].rank)
+            if all(pl.init_peek_mask == 0b11 for pl in self.players):
                 self.phase = Phase.TURNS
                 self.current_turn = 0
             return 0.0
 
-        # Draw from deck
-        if action == 0:
-            if self.deck:
-                self.drawn_card = self.deck.pop()
-            elif len(self.discard) > 1:
-                top = self.discard.pop()
-                self.deck = self.discard
-                random.shuffle(self.deck)
-                self.discard = [top]
-                self.drawn_card = self.deck.pop()
+        if POLICY_ACT_STACK_GIVE_BASE <= action < POLICY_ACT_STACK_GIVE_BASE + HAND_SIZE:
+            slot = action - POLICY_ACT_STACK_GIVE_BASE
+            return self._do_stack_give(player_idx, slot)
+
+        if POLICY_ACT_SNAP_BASE <= action < POLICY_ACT_SNAP_BASE + HAND_SIZE:
+            return self._do_snap(player_idx, action - POLICY_ACT_SNAP_BASE)
+
+        if POLICY_ACT_STACK_OPP_BASE <= action < POLICY_ACT_STACK_GIVE_BASE:
+            rel = (action - POLICY_ACT_STACK_OPP_BASE) // HAND_SIZE
+            slot = (action - POLICY_ACT_STACK_OPP_BASE) % HAND_SIZE
+            opps = self._opponent_indices(player_idx)
+            if rel >= len(opps):
+                return 0.0
+            return self._do_stack_opponent(player_idx, opps[rel], slot)
+
+        if self.current_turn != player_idx and self.pending_stack_give_actor != player_idx:
             return 0.0
 
-        # Draw from discard
-        if action == 1:
+        if action == POLICY_ACT_DRAW_DECK:
+            self.drawn_card = self._draw_from_deck()
+            return 0.0
+
+        if action == POLICY_ACT_DRAW_DISCARD:
             if self.discard:
                 self.drawn_card = self.discard.pop()
             return 0.0
 
-        # Swap drawn card with hand slot
-        if 2 <= action <= 5:
-            slot = action - 2
+        if POLICY_ACT_SWAP_BASE <= action < POLICY_ACT_SWAP_BASE + HAND_SIZE:
+            slot = action - POLICY_ACT_SWAP_BASE
             if self.drawn_card and p.hand[slot] is not None:
                 old = p.hand[slot]
                 p.hand[slot] = self.drawn_card
@@ -303,92 +508,219 @@ class CambioSim:
                 reward = (old.points() - self.drawn_card.points()) / 13.0
                 self.drawn_card = None
                 self.pending_ability = Ability.NONE
+                self._open_stack_window(old.rank)
                 self._advance_turn()
                 return reward
             return 0.0
 
-        # Discard drawn card
-        if action == 6:
+        if action == POLICY_ACT_DISCARD:
             if self.drawn_card:
                 ability = self.drawn_card.ability()
-                self.discard.append(self.drawn_card)
+                discarded = self.drawn_card
+                self.discard.append(discarded)
                 self.drawn_card = None
-                if ability != Ability.NONE:
+                self._open_stack_window(discarded.rank)
+                if ability == Ability.PEEK_OPPONENT:
                     self.pending_ability = ability
+                    self.peek_opponent_remaining = 1
+                elif ability != Ability.NONE:
+                    self.pending_ability = ability
+                    if ability == Ability.LOOK_SWITCH:
+                        self.look_switch_my_slot = -1
+                        self.look_switch_target = -1
+                        self.look_switch_target_slot = -1
+                        self.look_switch_peek_done = False
                 else:
                     self._advance_turn()
             return 0.0
 
-        # Peek own (ability from 9/10)
-        if 7 <= action <= 10:
-            slot = action - 7
+        if POLICY_ACT_PEEK_OWN_BASE <= action < POLICY_ACT_PEEK_OWN_BASE + HAND_SIZE:
+            slot = action - POLICY_ACT_PEEK_OWN_BASE
             if p.hand[slot] is not None:
                 p.known[slot] = True
-            self.pending_ability = Ability.NONE
-            self._advance_turn()
-            return 0.1  # small reward for information
-
-        # Peek opponent (ability from 7/8)
-        if 11 <= action <= 14:
+                self._record_peek(player_idx, player_idx, slot, p.hand[slot].rank)
             self.pending_ability = Ability.NONE
             self._advance_turn()
             return 0.1
 
-        # Blind switch / look-and-switch (J/Q or Black King)
-        if 15 <= action <= 18:
-            slot = action - 15
-            opp_idx = (player_idx + 1) % self.num_players
-            opp = self.players[opp_idx]
-            opp_slot = random.randint(0, HAND_SIZE - 1)
-            while opp.hand[opp_slot] is None and any(c is not None for c in opp.hand):
-                opp_slot = random.randint(0, HAND_SIZE - 1)
+        if POLICY_ACT_PEEK_OPP_BASE <= action < POLICY_ACT_PEEK_OPP_BASE + HAND_SIZE:
+            if self.pending_ability == Ability.LOOK_SWITCH and self.look_switch_my_slot >= 0:
+                target_slot = action - POLICY_ACT_PEEK_OPP_BASE
+                opps = self._opponent_indices(player_idx)
+                target_idx = opps[0] if opps else None
+                if target_idx is not None and self.players[target_idx].hand[target_slot] is not None:
+                    card = self.players[target_idx].hand[target_slot]
+                    self._record_peek(player_idx, target_idx, target_slot, card.rank)
+                    self.look_switch_target = target_idx
+                    self.look_switch_target_slot = target_slot
+                    self.look_switch_peek_done = True
+                return 0.1
+            target_slot = action - POLICY_ACT_PEEK_OPP_BASE
+            opps = self._opponent_indices(player_idx)
+            target_idx = opps[0] if opps else None
+            if target_idx is not None and self.players[target_idx].hand[target_slot] is not None:
+                card = self.players[target_idx].hand[target_slot]
+                self._record_peek(player_idx, target_idx, target_slot, card.rank)
+            self.peek_opponent_remaining -= 1
+            if self.peek_opponent_remaining > 0:
+                return 0.1
+            self.pending_ability = Ability.NONE
+            self.peek_opponent_remaining = 0
+            self._advance_turn()
+            return 0.1
 
-            if p.hand[slot] is not None and opp.hand[opp_slot] is not None:
-                my_pts_before = p.hand[slot].points()
-                their_pts = opp.hand[opp_slot].points()
-                p.hand[slot], opp.hand[opp_slot] = opp.hand[opp_slot], p.hand[slot]
-                p.known[slot] = False
-                opp.known[opp_slot] = False
-                reward = (my_pts_before - their_pts) / 13.0
-
+        if POLICY_ACT_SWITCH_BASE <= action < POLICY_ACT_SWITCH_BASE + HAND_SIZE:
+            slot = action - POLICY_ACT_SWITCH_BASE
+            if self.pending_ability == Ability.LOOK_SWITCH:
+                if self.look_switch_my_slot < 0:
+                    if p.hand[slot] is not None:
+                        p.known[slot] = True
+                        self._record_peek(player_idx, player_idx, slot, p.hand[slot].rank)
+                        self.look_switch_my_slot = slot
+                    return 0.1
+                if self.look_switch_peek_done:
+                    target = self.players[self.look_switch_target]
+                    ts = self.look_switch_target_slot
+                    if (
+                        slot == self.look_switch_my_slot
+                        and p.hand[slot] is not None
+                        and target.hand[ts] is not None
+                    ):
+                        my_pts = p.hand[slot].points()
+                        their_pts = target.hand[ts].points()
+                        p.hand[slot], target.hand[ts] = target.hand[ts], p.hand[slot]
+                        p.known[slot] = True
+                        target.known[ts] = False
+                        self.pending_ability = Ability.NONE
+                        self.look_switch_my_slot = -1
+                        self.look_switch_peek_done = False
+                        self._advance_turn()
+                        return (my_pts - their_pts) / 13.0
+                return 0.0
+            opps = self._opponent_indices(player_idx)
+            if not opps:
+                return 0.0
+            target_idx = random.choice(opps)
+            target = self.players[target_idx]
+            opp_slots = [i for i in range(HAND_SIZE) if target.hand[i] is not None]
+            if not opp_slots or p.hand[slot] is None:
                 self.pending_ability = Ability.NONE
                 self._advance_turn()
-                return reward
+                return 0.0
+            opp_slot = random.choice(opp_slots)
+            my_pts = p.hand[slot].points()
+            their_pts = target.hand[opp_slot].points()
+            sent_rank = p.hand[slot].rank
+            self._invalidate_slot(player_idx, slot)
+            self._invalidate_slot(target_idx, opp_slot)
+            p.hand[slot], target.hand[opp_slot] = target.hand[opp_slot], p.hand[slot]
+            p.known[slot] = False
+            target.known[opp_slot] = False
+            self._record_peek(player_idx, target_idx, opp_slot, sent_rank)
             self.pending_ability = Ability.NONE
             self._advance_turn()
-            return 0.0
+            return (my_pts - their_pts) / 13.0
 
-        # Call cambio
-        if action == 19:
+        if action == POLICY_ACT_CALL_CAMBIO:
             p.called_cambio = True
             self.cambio_caller = player_idx
             self.phase = Phase.FINAL_ROUND
             self.turns_after_cambio = 0
+            self.skip_final_round_count = True
             self._advance_turn()
             return 0.0
 
-        # Decline switch (Black King)
-        if action == 20:
+        if action == POLICY_ACT_DECLINE_SW:
+            if self.pending_ability == Ability.LOOK_SWITCH:
+                if not self.look_switch_peek_done:
+                    return -0.05
+                self.pending_ability = Ability.NONE
+                self.look_switch_my_slot = -1
+                self.look_switch_peek_done = False
+                self._advance_turn()
+                return 0.0
             self.pending_ability = Ability.BLIND_SWITCH
-            return -0.05  # small penalty for declining
+            return -0.05
 
         return 0.0
 
+    def _do_snap(self, player_idx: int, slot: int) -> float:
+        p = self.players[player_idx]
+        if not self.open_stack_rank or self.stack_rank_claimed:
+            return -0.1
+        card = p.hand[slot]
+        if card is None or card.rank != self.open_stack_rank:
+            self._apply_penalty(player_idx)
+            return -0.5
+        self.discard.append(card)
+        p.hand[slot] = None
+        p.known[slot] = False
+        self._invalidate_slot(player_idx, slot)
+        self.stack_rank_claimed = True
+        return 0.3
+
+    def _do_stack_opponent(self, player_idx: int, target_idx: int, slot: int) -> float:
+        if not self.open_stack_rank or self.stack_rank_claimed:
+            return -0.1
+        target = self.players[target_idx]
+        card = target.hand[slot]
+        if card is None:
+            return 0.0
+        rank, strength, ok = self._get_peek(player_idx, target_idx, slot)
+        if (
+            not ok
+            or strength < STACK_MEMORY_MIN
+            or rank != card.rank
+            or card.rank != self.open_stack_rank
+        ):
+            self._apply_penalty(player_idx)
+            return -0.5
+        self.discard.append(card)
+        target.hand[slot] = None
+        target.known[slot] = False
+        self._invalidate_slot(target_idx, slot)
+        self.stack_rank_claimed = True
+        self.pending_stack_give_actor = player_idx
+        self.pending_stack_give_target = target_idx
+        self.pending_stack_give_target_slot = slot
+        return 0.4
+
+    def _do_stack_give(self, player_idx: int, slot: int) -> float:
+        if self.pending_stack_give_actor != player_idx:
+            return 0.0
+        actor = self.players[player_idx]
+        target = self.players[self.pending_stack_give_target]
+        ts = self.pending_stack_give_target_slot
+        if actor.hand[slot] is None or target.hand[ts] is not None:
+            return 0.0
+        given = actor.hand[slot]
+        self._invalidate_slot(player_idx, slot)
+        actor.hand[slot] = None
+        actor.known[slot] = False
+        target.hand[ts] = given
+        target.known[ts] = False
+        self._record_peek(player_idx, self.pending_stack_give_target, ts, given.rank)
+        self.pending_stack_give_actor = -1
+        self.pending_stack_give_target = -1
+        self.pending_stack_give_target_slot = -1
+        return 0.0
+
     def _advance_turn(self):
+        self._decay_memories()
         self.current_turn = (self.current_turn + 1) % self.num_players
 
         if self.phase == Phase.FINAL_ROUND:
-            if self.current_turn == self.cambio_caller:
-                self.current_turn = (self.current_turn + 1) % self.num_players
-            self.turns_after_cambio += 1
-            if self.turns_after_cambio >= self.num_players - 1:
-                self.phase = Phase.DONE
+            if self.skip_final_round_count:
+                self.skip_final_round_count = False
+            else:
+                self.turns_after_cambio += 1
+                if self.turns_after_cambio >= self.num_players - 1:
+                    self.phase = Phase.DONE
 
     def is_done(self) -> bool:
         return self.phase == Phase.DONE
 
     def final_rewards(self) -> list[float]:
-        """Compute final reward for each player. Lower score = higher reward."""
         scores = [p.score() for p in self.players]
         min_score = min(scores)
         rewards = []
@@ -397,7 +729,6 @@ class CambioSim:
                 reward = 1.0
             else:
                 reward = -s / 40.0
-            # Penalty if you called cambio but didn't win
             if self.cambio_caller == i and s != min_score:
                 reward -= 0.5
             rewards.append(reward)

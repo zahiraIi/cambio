@@ -61,7 +61,7 @@ type Ability int
 
 const (
 	NoAbility     Ability = iota
-	PeekOpponent          // 7 or 8
+	PeekOpponent          // 7 or 8: peek one opponent card
 	PeekOwn               // 9 or 10
 	BlindSwitch           // Jack or Queen
 	LookAndSwitch         // Black King

@@ -7,4 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ai/ ./ai/
 WORKDIR /app/ai
 
-CMD ["python", "train.py", "--episodes", "50000", "--self-play", "--save-path", "/data/models/cambio"]
+CMD ["python", "train.py", "--episodes", "50000", "--self-play", "--save-path", "/data/models/cambio", "--num-players", "4"]

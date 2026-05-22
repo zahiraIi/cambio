@@ -12,7 +12,7 @@ except ImportError:
     raise
 
 from agent import CambioAgent
-from game_sim import NUM_ACTIONS, HAND_SIZE
+from policy_spec import HAND_SIZE, NUM_ACTIONS
 
 
 ACTION_MAP = {

@@ -20,6 +20,10 @@
     --success: #4ade80;
     --warning: #fbbf24;
     --danger: #f87171;
+    --card-w: 96px;
+    --card-h: 134px;
+    --card-w-seat: 62px;
+    --card-h-seat: 88px;
     --radius: 14px;
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -39,6 +43,12 @@ body {
     overflow-x: hidden;
 }
 
+body.in-game {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+}
+
 body::before {
     content: '';
     position: fixed;
@@ -53,6 +63,11 @@ body::before {
 #app {
     position: relative;
     z-index: 1;
+}
+
+body.in-game #app {
+    height: 100dvh;
+    overflow: hidden;
 }
 
 .screen {
@@ -365,17 +380,21 @@ select:focus {
 #game.screen.active {
     max-width: none;
     width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
     padding: 0.5rem 0.75rem 0.75rem;
     justify-content: stretch;
+    overflow: hidden;
 }
 
 .poker-room {
-    min-height: 100vh;
-    min-height: 100dvh;
+    height: 100%;
+    min-height: 0;
     position: relative;
     perspective: 1200px;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .room-chrome {
@@ -446,8 +465,8 @@ select:focus {
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    min-height: min(58vh, 520px);
-    max-height: min(65vh, 560px);
+    min-height: 0;
+    max-height: min(52dvh, 480px);
     perspective: 1100px;
 }
 
@@ -571,25 +590,22 @@ select:focus {
 }
 
 .seat-hand {
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-end;
+    display: grid;
+    grid-template-columns: repeat(2, var(--card-w-seat));
+    grid-auto-rows: var(--card-h-seat);
+    gap: 0.3rem;
+    justify-content: center;
 }
 
 .seat-hand .card {
-    width: 96px;
-    height: 134px;
-    font-size: 1.35rem;
+    width: var(--card-w-seat);
+    height: var(--card-h-seat);
+    font-size: 0.72rem;
 }
-
-.seat-hand .card:nth-child(1) { transform: rotate(-3deg); }
-.seat-hand .card:nth-child(2) { transform: rotate(-1deg); }
-.seat-hand .card:nth-child(3) { transform: rotate(1deg); }
-.seat-hand .card:nth-child(4) { transform: rotate(3deg); }
 
 .seat-hand .card.clickable:hover,
 .seat-hand .card.stackable-opponent:hover {
-    transform: translateY(-8px) rotate(0deg) scale(1.05);
+    transform: translateY(-6px) scale(1.05);
     z-index: 5;
 }
 
@@ -753,27 +769,23 @@ select:focus {
 }
 
 .hand {
-    display: flex;
-    gap: 0.65rem;
+    display: grid;
+    grid-template-columns: repeat(2, var(--card-w));
+    grid-auto-rows: var(--card-h);
+    gap: 0.5rem;
     justify-content: center;
-    min-height: 150px;
-    align-items: flex-end;
+    align-content: end;
 }
 
 .hand-pov .card {
-    width: 96px;
-    height: 134px;
+    width: var(--card-w);
+    height: var(--card-h);
     font-size: 1.35rem;
 }
 
-.hand-pov .card:nth-child(1) { transform: rotate(-4deg); }
-.hand-pov .card:nth-child(2) { transform: rotate(-1.5deg); }
-.hand-pov .card:nth-child(3) { transform: rotate(1.5deg); }
-.hand-pov .card:nth-child(4) { transform: rotate(4deg); }
-
 .hand-pov .card.selected,
 .hand-pov .card.clickable:hover {
-    transform: translateY(-12px) rotate(0deg) scale(1.05);
+    transform: translateY(-8px) scale(1.04);
 }
 
 .action-bar {
@@ -891,6 +903,12 @@ select:focus {
     font-weight: 600;
 }
 
+.ability-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
 /* ── Card fly animations (3D flip) ── */
 .card-fly-layer {
     position: fixed;
@@ -905,6 +923,8 @@ select:focus {
     z-index: 601;
     pointer-events: none;
     transform-style: preserve-3d;
+    width: var(--card-w);
+    height: var(--card-h);
 }
 
 .card-flight-root.is-holding {
@@ -1005,30 +1025,32 @@ select:focus {
     border-color: rgba(56, 189, 248, 0.25);
 }
 
-/* ── Scores ── */
-.scores-screen {
-    display: none;
+/* ── Scores overlay (on table) ── */
+.scores-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
-    min-height: 100dvh;
-    padding: 1.5rem;
-    background: radial-gradient(ellipse at center, rgba(15, 23, 42, 0.95) 0%, rgba(2, 6, 23, 0.98) 70%);
+    padding: 1.25rem;
+    background: rgba(2, 6, 23, 0.78);
+    backdrop-filter: blur(10px);
+    animation: fadeSlideUp 0.35s var(--ease-out);
 }
 
-.scores-screen.active {
-    display: flex;
-}
-
-.scores-center {
+.scores-overlay-panel {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    width: 100%;
-    max-width: 420px;
+    width: min(100%, 420px);
     text-align: center;
-    gap: 1.75rem;
+    gap: 1.25rem;
+    padding: 1.75rem 1.5rem;
+    border-radius: 20px;
+    border: 1px solid rgba(74, 222, 128, 0.2);
+    background: rgba(15, 23, 42, 0.92);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
 }
 
 .winner-announce {

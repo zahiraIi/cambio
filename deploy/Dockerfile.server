@@ -11,6 +11,8 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /app/cambio-server .
 COPY --from=builder /app/web ./web
+COPY models/ ./models/
 
 EXPOSE 8080
+ENV CAMBIO_MODEL_PATH=/app/models/cambio
 CMD ["./cambio-server"]

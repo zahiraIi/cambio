@@ -14,10 +14,10 @@ Card game simulator and AI practice engine.
 | Card | Points | Ability |
 |------|--------|---------|
 | A-6 | Face value | — |
-| 7, 8 | Face value | Peek at opponent's card |
+| 7, 8 | Face value | Peek at one opponent's card |
 | 9, 10 | Face value | Peek at your own card |
 | J, Q | 10 | Blind switch with opponent |
-| Black King | 10 | Look at card & switch (or decline → forced blind switch) |
+| Black King | 10 | Look at your card + one opponent card; optional swap |
 | Red King | -1 | — |
 | Joker | 0 | — |
 

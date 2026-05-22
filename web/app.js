@@ -30,8 +30,14 @@ const SEAT_POSITIONS = [
 function showScreen(id) {
     document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
     $(`#${id}`).classList.add('active');
+    document.body.classList.toggle('in-game', id === 'game');
+    if (id !== 'game') hideScoresOverlay();
     if (id === 'lobby') startGamesPoll();
     else stopGamesPoll();
+}
+
+function hideScoresOverlay() {
+    $('#scoresOverlay')?.classList.add('hidden');
 }
 
 function memoryKey(targetId, slot) {
@@ -121,8 +127,8 @@ function animateCardFlight(cardText, opts = {}) {
     const toR = toEl?.getBoundingClientRect?.();
     if (!fromR || !toR) return;
 
-    const w = Math.max(fromR.width, toR.width, 80);
-    const h = Math.max(fromR.height, toR.height, 112);
+    const w = 96;
+    const h = 134;
     const startCx = fromR.left + fromR.width / 2;
     const startCy = fromR.top + fromR.height / 2;
     const endCx = toR.left + toR.width / 2;
@@ -573,12 +579,13 @@ function handleEvent(event) {
             toast(`Looked: ${evtData.card}`, true);
             break;
         case 'switch_declined':
-            toast('Switch declined — blind switch required', true);
-            pendingAbility = 'blind_switch';
+            toast(evtData.message || 'Kept cards without swapping', true);
+            pendingAbility = null;
+            selectedSlot = null;
             syncAbilityPromptFromState();
             break;
         case 'cambio_called':
-            toast(`${evtData.message} — one final turn for each other player.`, true);
+            toast(`${evtData?.message || 'Cambio called'} — each other player gets one final turn.`, true);
             break;
         case 'snap_success':
             toast(`${getPlayerName(evtPlayer)} stacked ${evtData.card}!`, true);
@@ -654,13 +661,25 @@ function syncAbilityPromptFromState() {
     if (isMyTurn && pa && pa !== 'none' && phase !== 'init_peek' && phase !== 'scoring') {
         pendingAbility = pa;
         prompt?.classList.remove('hidden');
-        $('#abilityText').textContent = abilityMessage(pa, gameState.peekOpponentRemaining);
         const skip = $('#abilitySkipBtn');
+        const confirm = $('#abilityConfirmBtn');
+        skip?.classList.add('hidden');
+        confirm?.classList.add('hidden');
+
         if (pa === 'look_and_switch') {
-            skip.textContent = 'Decline Switch';
-            skip.classList.remove('hidden');
+            const ls = gameState.lookSwitch || {};
+            if (ls.mySlot == null || ls.mySlot < 0) {
+                $('#abilityText').textContent = 'Pick one of your cards to look at';
+            } else if (!ls.peekDone) {
+                $('#abilityText').textContent = "Pick an opponent's card to look at";
+            } else {
+                $('#abilityText').textContent = 'Swap cards or keep yours?';
+                skip.textContent = 'Keep';
+                skip?.classList.remove('hidden');
+                confirm?.classList.remove('hidden');
+            }
         } else {
-            skip.classList.add('hidden');
+            $('#abilityText').textContent = abilityMessage(pa);
         }
     } else {
         pendingAbility = null;
@@ -668,16 +687,15 @@ function syncAbilityPromptFromState() {
     }
 }
 
-function abilityMessage(ability, peekRem) {
-    const messages = {
-        peek_own: 'Click one of your cards to peek',
-        peek_opponent: "Click an opponent's card to peek",
-        blind_switch: 'Pick your card, then an opponent\'s card',
-        look_and_switch: 'Pick your card, then an opponent\'s card to look & switch',
-    };
-    let base = messages[ability] || ability;
-    if (ability === 'peek_opponent' && peekRem > 0) base += ` (${peekRem} left)`;
-    return base;
+function abilityMessage(ability) {
+    return (
+        {
+            peek_own: 'Click one of your cards to peek',
+            peek_opponent: "Click one opponent's card to peek",
+            blind_switch: 'Pick your card, then an opponent\'s card',
+            look_and_switch: 'Pick your card, then an opponent\'s card — swap optional',
+        }[ability] || ability
+    );
 }
 
 function canReturnDrawnCard() {
@@ -749,13 +767,13 @@ function renderGame(dealAnim = false) {
         const left = gameState.initPeeksLeft ?? 2;
         turnEl.textContent = left > 0 ? `Peek your first two cards (${left} left)` : 'Waiting for others…';
         turnEl.classList.toggle('my-turn', left > 0);
-    } else if (phase === 'final_round' && isMyTurn) {
-        turnEl.textContent = 'Final round — your last turn';
-        turnEl.classList.add('my-turn');
     } else if (phase === 'final_round') {
+        const others = (gameState.players?.length || 1) - 1;
         const name = getPlayerName(gameState.currentTurn);
-        turnEl.textContent = name ? `Final round — ${name}'s turn` : 'Final round';
-        turnEl.classList.remove('my-turn');
+        turnEl.textContent = name
+            ? `Final round (${others} player${others === 1 ? '' : 's'} left) — ${name}'s turn`
+            : `Final round — ${others} player${others === 1 ? '' : 's'} still to play`;
+        turnEl.classList.toggle('my-turn', isMyTurn);
     } else if (isMyTurn) {
         turnEl.textContent = 'Your turn';
         turnEl.classList.add('my-turn');
@@ -974,7 +992,15 @@ function handleOwnCardClick(slot) {
         renderDrawnCard(true, false);
         return;
     }
-    if (pendingAbility === 'blind_switch' || pendingAbility === 'look_and_switch') {
+    if (pendingAbility === 'look_and_switch') {
+        const ls = gameState.lookSwitch || {};
+        if (ls.mySlot == null || ls.mySlot < 0) {
+            sendAction('look_switch_own', { slot });
+            selectedSlot = null;
+            return;
+        }
+    }
+    if (pendingAbility === 'blind_switch') {
         selectedSlot = slot;
         renderPlayerHand();
         return;
@@ -995,11 +1021,12 @@ function handleOpponentCardClick(targetId, targetSlot) {
         $('#abilityPrompt').classList.add('hidden');
         return;
     }
-    if (pendingAbility === 'look_and_switch' && selectedSlot !== null) {
-        sendAction('look_switch', { slot: selectedSlot, targetId, targetSlot });
-        pendingAbility = null;
-        selectedSlot = null;
-        $('#abilityPrompt').classList.add('hidden');
+    if (pendingAbility === 'look_and_switch') {
+        const ls = gameState.lookSwitch || {};
+        if ((ls.mySlot == null || ls.mySlot < 0) || ls.peekDone) {
+            return;
+        }
+        sendAction('look_switch_peek', { targetId, targetSlot });
         return;
     }
     if (canStackOpponentCard(targetId, targetSlot)) {
@@ -1019,6 +1046,20 @@ function sendAction(action, data = {}) {
 function skipAbility() {
     if (pendingAbility === 'look_and_switch') sendAction('decline_switch');
     pendingAbility = null;
+    selectedSlot = null;
+    $('#abilityPrompt').classList.add('hidden');
+}
+
+function confirmLookSwitch() {
+    const ls = gameState?.lookSwitch;
+    if (!ls?.peekDone) return;
+    sendAction('look_switch', {
+        slot: ls.mySlot,
+        targetId: ls.targetId,
+        targetSlot: ls.targetSlot,
+    });
+    pendingAbility = null;
+    selectedSlot = null;
     $('#abilityPrompt').classList.add('hidden');
 }
 
@@ -1031,7 +1072,7 @@ function checkGameOver() {
 }
 
 function showScores(scores) {
-    showScreen('scores');
+    const overlay = $('#scoresOverlay');
     const entries = Object.entries(scores || {});
     const announce = $('#winnerAnnounce');
     const nameEl = $('#winnerName');
@@ -1039,6 +1080,7 @@ function showScores(scores) {
     if (entries.length === 0) {
         if (announce) announce.classList.add('hidden');
         $('#scoreBoard').innerHTML = '<p class="games-empty">No scores recorded.</p>';
+        overlay?.classList.remove('hidden');
         return;
     }
     const sorted = entries.sort((a, b) => a[1] - b[1]);
@@ -1065,6 +1107,7 @@ function showScores(scores) {
             </div>`;
         })
         .join('');
+    overlay?.classList.remove('hidden');
 }
 
 function getPlayerName(playerId) {
@@ -1098,6 +1141,7 @@ $('#drawDiscardBtn').addEventListener('click', () => sendAction('draw_discard'))
 $('#cambioBtn').addEventListener('click', () => sendAction('call_cambio'));
 
 $('#abilitySkipBtn').addEventListener('click', skipAbility);
+$('#abilityConfirmBtn').addEventListener('click', confirmLookSwitch);
 
 // Boot: URL param, session restore, games poll
 (function init() {

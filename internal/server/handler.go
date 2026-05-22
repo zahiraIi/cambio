@@ -250,6 +250,8 @@ func (h *Handler) handleAction(room *GameRoom, client *Client, msg WSMessage) {
 		"peek_own":       game.ActionPeekOwn,
 		"peek_opponent":  game.ActionPeekOpponent,
 		"blind_switch":   game.ActionBlindSwitch,
+		"look_switch_own": game.ActionLookSwitchOwn,
+		"look_switch_peek": game.ActionLookSwitchPeek,
 		"look_switch":    game.ActionLookAndSwitch,
 		"decline_switch": game.ActionDeclineSwitch,
 		"call_cambio":    game.ActionCallCambio,
@@ -348,24 +350,29 @@ func (h *Handler) pumpBots(room *GameRoom) {
 			act, ok := room.Engine.BotChooseAction(botID)
 			if !ok {
 				log.Printf("bot: no move for %s", botID)
-				events := room.Engine.ForceSkipStackGive()
-				if len(events) == 0 {
-					events = room.Engine.ForceSkipAbility()
-				}
+				events := botRecoveryEvents(room.Engine)
 				h.broadcastEngineEvents(room, events)
 				continue
 			}
 			events, err := room.Engine.Execute(act)
 			if err != nil {
 				log.Printf("bot execute: %v", err)
-				// #region agent log
-				game.AgentDebugLog("B", "handler.go:pumpBots", "bot execute failed", map[string]interface{}{
-					"botID": botID, "actionType": int(act.Type), "error": err.Error(),
-				})
-				// #endregion
+				events = botRecoveryEvents(room.Engine)
+				h.broadcastEngineEvents(room, events)
 				continue
 			}
 			h.broadcastEngineEvents(room, events)
 		}
 	}()
+}
+
+func botRecoveryEvents(engine *game.Engine) []game.Event {
+	events := engine.ForceSkipStackGive()
+	if len(events) == 0 {
+		events = engine.ForceSkipAbility()
+	}
+	if len(events) == 0 {
+		events = engine.ForceAdvanceBotTurn()
+	}
+	return events
 }
