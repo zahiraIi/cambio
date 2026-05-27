@@ -13,10 +13,13 @@ type Hub struct {
 }
 
 type GameRoom struct {
-	mu      sync.Mutex
-	Engine  *game.Engine
-	Clients map[string]*Client
-	botPump int32
+	mu               sync.Mutex
+	GameID           string
+	OwnerID          string
+	Engine           *game.Engine
+	Clients          map[string]*Client
+	botPump          int32
+	TutorialPractice bool
 }
 
 func NewHub() *Hub {
@@ -35,11 +38,18 @@ func (h *Hub) CreateGame(gameID string, maxPlayers int) (*GameRoom, error) {
 
 	engine := game.NewEngine(gameID, maxPlayers)
 	room := &GameRoom{
+		GameID:  gameID,
 		Engine:  engine,
 		Clients: make(map[string]*Client),
 	}
 	h.games[gameID] = room
 	return room, nil
+}
+
+func (h *Hub) DeleteGame(gameID string) {
+	h.mu.Lock()
+	delete(h.games, gameID)
+	h.mu.Unlock()
 }
 
 func (h *Hub) GetGame(gameID string) *GameRoom {
@@ -84,6 +94,7 @@ func (room *GameRoom) LobbyPayload() map[string]interface{} {
 		"onlineCount": onlineCount,
 		"maxPlayers":  room.Engine.MaxPlayers(),
 		"phase":       room.Engine.PublicPhase(),
+		"ownerId":     room.OwnerID,
 		"canStart":    room.Engine.PublicPhase() == "waiting" && onlineCount >= 2 && room.Engine.PlayerCount() >= 2,
 	}
 }

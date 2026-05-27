@@ -1,4 +1,10 @@
 {
+  "private": true,
+  "scripts": {
+    "start": "python3 scripts/launch.py --native --no-open",
+    "docker": "python3 scripts/launch.py",
+    "build": "node -e \"console.log('No frontend build step. Edit web/src/ directly, then run: npm start (or python3 scripts/launch.py --native)')\""
+  },
   "dependencies": {
     "docker": "^1.0.0"
   }

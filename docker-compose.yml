@@ -5,10 +5,16 @@ services:
       dockerfile: deploy/Dockerfile.server
     image: cambio-server:latest
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:8080"
     environment:
       CAMBIO_MODEL_PATH: /app/models/cambio
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/games"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
 
   trainer:
     profiles: ["train"]

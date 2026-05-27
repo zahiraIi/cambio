@@ -98,6 +98,9 @@ type Engine struct {
 	lookSwitchTargetID   string
 	lookSwitchTargetSlot int
 	lookSwitchPeekDone   bool
+
+	handClearWinner string // set when a player stacks out their entire hand
+	endReason       string // "hand_cleared" or "cambio" when entering PhaseScoring
 }
 
 type memoryEntry struct {
@@ -370,6 +373,8 @@ func (e *Engine) Start() error {
 	e.DiscardPile = []Card{topCard}
 
 	e.Phase = PhaseInitPeek
+	e.handClearWinner = ""
+	e.endReason = ""
 	e.emit(Event{Type: "game_started", Data: map[string]int{"playerCount": len(e.Players)}})
 	return nil
 }
@@ -555,7 +560,9 @@ func (e *Engine) handleSwapCard(a Action) error {
 		Data: map[string]interface{}{"slot": a.Slot, "discarded": old.String()},
 	})
 
-	e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	if a.Slot < HandSize {
+		e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	}
 	e.openStackWindow(old.Rank)
 	e.advanceTurn()
 	return nil
@@ -912,6 +919,7 @@ func (e *Engine) handleCallCambio(a Action) error {
 	e.Phase = PhaseFinalRound
 	e.TurnsAfterCambio = 0
 	e.skipFinalRoundCount = true
+	e.clearStackWindow()
 
 	e.emit(Event{
 		Type: "cambio_called", PlayerID: a.PlayerID,
@@ -921,14 +929,21 @@ func (e *Engine) handleCallCambio(a Action) error {
 	return nil
 }
 
-func (e *Engine) handleSnapMatch(a Action) error {
-	if e.Phase != PhaseTurns && e.Phase != PhaseFinalRound {
-		return fmt.Errorf("cannot snap now")
+func (e *Engine) rejectIfMustFinishDraw(playerID string) error {
+	if e.DrawnCard == nil || len(e.Players) == 0 || e.CurrentTurn < 0 || e.CurrentTurn >= len(e.Players) {
+		return nil
 	}
-	if e.DrawnCard != nil && e.Players[e.CurrentTurn].ID == a.PlayerID {
+	if e.Players[e.CurrentTurn].ID == playerID {
 		return fmt.Errorf("finish your draw action first")
 	}
-	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
+	return nil
+}
+
+func (e *Engine) handleSnapMatch(a Action) error {
+	if e.Phase != PhaseTurns {
+		return fmt.Errorf("cannot snap now")
+	}
+	if err := e.rejectIfMustFinishDraw(a.PlayerID); err != nil {
 		return err
 	}
 	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
@@ -952,8 +967,8 @@ func (e *Engine) handleSnapMatch(a Action) error {
 	if player == nil {
 		return fmt.Errorf("player not found")
 	}
-	handCard := player.Hand[a.Slot]
-	if handCard == nil {
+	handCard, ok := player.cardAtSlot(a.Slot)
+	if !ok {
 		return fmt.Errorf("no card in that slot")
 	}
 	if handCard.Rank != e.openStackRank {
@@ -966,25 +981,24 @@ func (e *Engine) handleSnapMatch(a Action) error {
 	}
 
 	e.DiscardPile = append(e.DiscardPile, *handCard)
-	player.Hand[a.Slot] = nil
-	player.Known[a.Slot] = false
-	e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	player.clearCardAtSlot(a.Slot)
+	if a.Slot < HandSize {
+		e.invalidateKnowledgeForSlot(a.PlayerID, a.Slot)
+	}
 	e.stackRankClaimed = true
 	e.emit(Event{
 		Type: "snap_success", PlayerID: a.PlayerID,
 		Data: map[string]interface{}{"slot": a.Slot, "card": handCard.String()},
 	})
+	e.maybeEndGameForEmptyHand(a.PlayerID)
 	return nil
 }
 
 func (e *Engine) handleStackOpponent(a Action) error {
-	if e.Phase != PhaseTurns && e.Phase != PhaseFinalRound {
+	if e.Phase != PhaseTurns {
 		return fmt.Errorf("cannot stack opponent now")
 	}
-	if e.DrawnCard != nil && e.Players[e.CurrentTurn].ID == a.PlayerID {
-		return fmt.Errorf("finish your draw action first")
-	}
-	if err := e.rejectIfPendingAbilityFor(a.PlayerID); err != nil {
+	if err := e.rejectIfMustFinishDraw(a.PlayerID); err != nil {
 		return err
 	}
 	if err := e.rejectIfPendingStackGive(a.PlayerID); err != nil {
@@ -1016,7 +1030,10 @@ func (e *Engine) handleStackOpponent(a Action) error {
 	actualCard := target.Hand[a.TargetSlot]
 	memRank, memStrength, hadMemory := e.getPeekKnowledge(a.PlayerID, a.TargetID, a.TargetSlot)
 
-	if !hadMemory || memStrength < 0.35 || memRank != actualCard.Rank || actualCard.Rank != e.openStackRank {
+	if !hadMemory || memStrength < 0.35 {
+		return fmt.Errorf("you don't remember that opponent card well enough")
+	}
+	if memRank != actualCard.Rank || actualCard.Rank != e.openStackRank {
 		e.applyPenaltyCard(actor)
 		e.emit(Event{
 			Type: "stack_opponent_failed", PlayerID: a.PlayerID,
@@ -1086,6 +1103,7 @@ func (e *Engine) handleStackGive(a Action) error {
 			"mySlot": a.Slot, "targetPlayer": target.ID, "targetSlot": ts,
 		},
 	})
+	e.maybeEndGameForEmptyHand(a.PlayerID)
 	return nil
 }
 
@@ -1103,22 +1121,79 @@ func (e *Engine) scoresUnlocked() map[string]int {
 	return scores
 }
 
+func (e *Engine) winnersFromScores(scores map[string]int) []string {
+	if len(scores) == 0 {
+		return nil
+	}
+	lowest := scores[e.Players[0].ID]
+	for _, s := range scores {
+		if s < lowest {
+			lowest = s
+		}
+	}
+	winners := make([]string, 0, len(scores))
+	for id, s := range scores {
+		if s == lowest {
+			winners = append(winners, id)
+		}
+	}
+	return winners
+}
+
+func (e *Engine) gameOverPayload() map[string]interface{} {
+	scores := e.scoresUnlocked()
+	winners := e.winnersFromScores(scores)
+	reason := e.endReason
+	if e.handClearWinner != "" {
+		reason = "hand_cleared"
+		winners = []string{e.handClearWinner}
+	}
+	if reason == "" {
+		reason = "lowest_score"
+	}
+	return map[string]interface{}{
+		"scores":  scores,
+		"winners": winners,
+		"reason":  reason,
+	}
+}
+
 func (e *Engine) GetState(forPlayerID string) map[string]interface{} {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	players := make([]map[string]interface{}, len(e.Players))
 	for i, p := range e.Players {
-		hand := make([]map[string]interface{}, HandSize)
+		hand := make([]map[string]interface{}, HandSize+len(p.Extra))
 		for j := 0; j < HandSize; j++ {
 			slot := map[string]interface{}{"hasCard": p.Hand[j] != nil}
-			if p.ID == forPlayerID && p.Known[j] && p.Hand[j] != nil {
-				slot["card"] = p.Hand[j].String()
-				slot["points"] = p.Hand[j].Points()
-				slot["rank"] = int(p.Hand[j].Rank)
-				slot["known"] = true
+			if p.Hand[j] != nil {
+				showCard := e.Phase == PhaseScoring || p.CalledCambio || (p.ID == forPlayerID && p.Known[j])
+				if showCard {
+					slot["card"] = p.Hand[j].String()
+					slot["points"] = p.Hand[j].Points()
+					slot["rank"] = int(p.Hand[j].Rank)
+					slot["known"] = true
+					if p.CalledCambio {
+						slot["revealed"] = true
+					}
+				}
 			}
 			hand[j] = slot
+		}
+		for j, card := range p.Extra {
+			idx := HandSize + j
+			slot := map[string]interface{}{"hasCard": card != nil}
+			if card != nil && (e.Phase == PhaseScoring || p.CalledCambio || p.ID == forPlayerID) {
+				slot["card"] = card.String()
+				slot["points"] = card.Points()
+				slot["rank"] = int(card.Rank)
+				slot["known"] = true
+				if p.CalledCambio {
+					slot["revealed"] = true
+				}
+			}
+			hand[idx] = slot
 		}
 		players[i] = map[string]interface{}{
 			"id": p.ID, "name": p.Name, "hand": hand,
@@ -1200,7 +1275,10 @@ func (e *Engine) GetState(forPlayerID string) map[string]interface{} {
 	}
 
 	if e.Phase == PhaseScoring {
-		state["scores"] = e.scoresUnlocked()
+		payload := e.gameOverPayload()
+		state["scores"] = payload["scores"]
+		state["winners"] = payload["winners"]
+		state["winReason"] = payload["reason"]
 	}
 
 	return state
@@ -1251,6 +1329,31 @@ func initPeeksRemaining(mask uint8) int {
 	return n
 }
 
+func (e *Engine) maybeEndGameForEmptyHand(playerID string) {
+	if e.Phase == PhaseScoring || e.Phase == PhaseWaiting {
+		return
+	}
+	p := e.findPlayer(playerID)
+	if p == nil || p.ActiveCardCount() > 0 {
+		return
+	}
+	// Opponent stack removes a card but the actor must give one back first.
+	if e.pendingStackGiveActor != "" && e.pendingStackGiveTargetID == playerID {
+		return
+	}
+	e.pendingStackGiveActor = ""
+	e.pendingStackGiveTargetID = ""
+	e.pendingStackGiveTargetSlot = -1
+	e.Phase = PhaseScoring
+	e.handClearWinner = playerID
+	e.endReason = "hand_cleared"
+	e.emit(Event{
+		Type: "hand_cleared", PlayerID: playerID,
+		Data: map[string]string{"message": fmt.Sprintf("%s cleared their hand!", p.Name)},
+	})
+	e.emit(Event{Type: "game_over", Data: e.gameOverPayload()})
+}
+
 func (e *Engine) advanceTurn() {
 	if len(e.Players) == 0 {
 		return
@@ -1266,7 +1369,8 @@ func (e *Engine) advanceTurn() {
 			e.TurnsAfterCambio++
 			if e.TurnsAfterCambio >= len(e.Players)-1 {
 				e.Phase = PhaseScoring
-				e.emit(Event{Type: "game_over", Data: e.scoresUnlocked()})
+				e.endReason = "cambio"
+				e.emit(Event{Type: "game_over", Data: e.gameOverPayload()})
 				return
 			}
 		}
@@ -1366,13 +1470,7 @@ func (e *Engine) applyPenaltyCard(player *Player) {
 	if !ok {
 		return
 	}
-	for i := 0; i < HandSize; i++ {
-		if player.Hand[i] == nil {
-			player.Hand[i] = &penalty
-			player.Known[i] = false
-			return
-		}
-	}
+	player.addPenaltyCard(penalty)
 }
 
 func (e *Engine) validateTurn(playerID string) error {

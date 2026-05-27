@@ -111,3 +111,74 @@ func TestCallCambioTwoPlayers(t *testing.T) {
 		t.Fatalf("expected scoring, got %s", phaseName(e.Phase))
 	}
 }
+
+func TestCallCambioRevealsHand(t *testing.T) {
+	e := NewEngine("test", 2)
+	_ = e.AddPlayer("p1", "Alice")
+	_ = e.AddPlayer("p2", "Bob")
+	if err := e.Start(); err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	e.Phase = PhaseTurns
+	e.CurrentTurn = 0
+	e.Players[0].SetCard(0, Card{Rank: Ace, Suit: Hearts})
+	e.Players[0].SetCard(1, Card{Rank: King, Suit: Spades})
+	e.Players[0].Known[0] = false
+	e.Players[0].Known[1] = false
+	e.mu.Unlock()
+
+	if _, err := e.Execute(Action{Type: ActionCallCambio, PlayerID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	state := e.GetState("p2")
+	players := state["players"].([]map[string]interface{})
+	var alice map[string]interface{}
+	for _, pl := range players {
+		if pl["id"] == "p1" {
+			alice = pl
+			break
+		}
+	}
+	if alice == nil {
+		t.Fatal("alice not in state")
+	}
+	hand := alice["hand"].([]map[string]interface{})
+	if hand[0]["card"] == nil || hand[1]["card"] == nil {
+		t.Fatalf("expected all cambio caller cards revealed to opponent, got %v", hand)
+	}
+	if hand[0]["revealed"] != true {
+		t.Fatal("expected revealed flag on cambio hand")
+	}
+}
+
+func TestCallCambioDisablesStacking(t *testing.T) {
+	e := NewEngine("test", 2)
+	_ = e.AddPlayer("p1", "Alice")
+	_ = e.AddPlayer("p2", "Bob")
+	if err := e.Start(); err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	e.Phase = PhaseTurns
+	e.CurrentTurn = 0
+	e.openStackWindow(Seven)
+	e.Players[1].SetCard(0, Card{Rank: Seven, Suit: Hearts})
+	e.mu.Unlock()
+
+	if _, err := e.Execute(Action{Type: ActionCallCambio, PlayerID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.mu.RLock()
+	if e.openStackRank != 0 {
+		t.Fatalf("expected stack window cleared, rank=%v", e.openStackRank)
+	}
+	e.mu.RUnlock()
+
+	_, err := e.Execute(Action{Type: ActionSnapMatch, PlayerID: "p2", Slot: 0})
+	if err == nil || err.Error() != "cannot snap now" {
+		t.Fatalf("expected snap blocked after cambio, got %v", err)
+	}
+}

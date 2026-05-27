@@ -1,0 +1,9 @@
+.git
+.cursor
+**/__pycache__
+**/*.pyc
+ai/
+agent-transcripts
+*.md
+!README.md
+deploy/k8s

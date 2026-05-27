@@ -1,0 +1,15 @@
+# Render.com — connect this repo at https://dashboard.render.com
+# New → Blueprint → connect github.com/zahiraIi/cambio
+services:
+  - type: web
+    name: cambio
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile.server
+    dockerContext: .
+    plan: free
+    healthCheckPath: /api/games
+    envVars:
+      - key: CAMBIO_MODEL_PATH
+        value: /app/models/cambio
+      - key: PORT
+        value: "8080"

@@ -85,11 +85,13 @@ func (h *Handler) handleCreateGame(w http.ResponseWriter, r *http.Request) {
 	if req.MaxPlayers > 6 {
 		req.MaxPlayers = 6
 	}
-	if _, err := h.Hub.CreateGame(req.GameID, req.MaxPlayers); err != nil {
+	room, err := h.Hub.CreateGame(req.GameID, req.MaxPlayers)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	playerID := fmt.Sprintf("p-%d", time.Now().UnixNano())
+	room.OwnerID = playerID
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"gameId":     req.GameID,
@@ -104,10 +106,11 @@ func (h *Handler) handleSoloGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PlayerID      string `json:"playerId"`
-		PlayerName    string `json:"playerName"`
-		BotCount      int    `json:"botCount"`
-		BotDifficulty int    `json:"botDifficulty"`
+		PlayerID         string `json:"playerId"`
+		PlayerName       string `json:"playerName"`
+		BotCount         int    `json:"botCount"`
+		BotDifficulty    int    `json:"botDifficulty"`
+		TutorialPractice bool   `json:"tutorialPractice"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -117,7 +120,9 @@ func (h *Handler) handleSoloGame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "playerName required", http.StatusBadRequest)
 		return
 	}
-	if req.BotCount < 1 || req.BotCount > 5 {
+	if req.TutorialPractice {
+		req.BotCount = 1
+	} else if req.BotCount < 1 || req.BotCount > 5 {
 		http.Error(w, "botCount must be between 1 and 5", http.StatusBadRequest)
 		return
 	}
@@ -130,6 +135,7 @@ func (h *Handler) handleSoloGame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	room.TutorialPractice = req.TutorialPractice
 	if err := room.Engine.AddPlayer(req.PlayerID, req.PlayerName); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -211,6 +217,10 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			log.Printf("read error: %v", err)
 			if room.UnregisterClient(playerID, client) && room.Engine.PublicPhase() == "waiting" {
 				_ = room.Engine.RemovePlayer(playerID)
+				if playerID == room.OwnerID || room.Engine.PlayerCount() == 0 {
+					h.cancelWaitingRoom(room)
+					break
+				}
 			}
 			room.Broadcast(map[string]interface{}{
 				"type": "lobby_update",
@@ -329,7 +339,29 @@ func (h *Handler) broadcastEngineEvents(room *GameRoom, events []game.Event) {
 	}
 }
 
+func (h *Handler) cancelWaitingRoom(room *GameRoom) {
+	room.Broadcast(map[string]interface{}{
+		"type":   "game_cancelled",
+		"reason": "host_left",
+	})
+	room.mu.Lock()
+	clients := make([]*Client, 0, len(room.Clients))
+	for _, c := range room.Clients {
+		clients = append(clients, c)
+	}
+	room.mu.Unlock()
+	for _, c := range clients {
+		c.Conn.Close()
+	}
+	if room.GameID != "" {
+		h.Hub.DeleteGame(room.GameID)
+	}
+}
+
 func (h *Handler) pumpBots(room *GameRoom) {
+	if room.TutorialPractice {
+		return
+	}
 	if !atomic.CompareAndSwapInt32(&room.botPump, 0, 1) {
 		go func() {
 			time.Sleep(500 * time.Millisecond)

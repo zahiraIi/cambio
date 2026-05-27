@@ -8,6 +8,7 @@ type Player struct {
 	ID           string
 	Name         string
 	Hand         [HandSize]*Card
+	Extra        []*Card // penalty cards when all four slots are full
 	Known        [HandSize]bool // which cards this player has peeked at (abilities / post-swap)
 	IsBot        bool
 	CalledCambio bool
@@ -44,6 +45,11 @@ func (p *Player) Score() int {
 			total += card.Points()
 		}
 	}
+	for _, card := range p.Extra {
+		if card != nil {
+			total += card.Points()
+		}
+	}
 	return total
 }
 
@@ -56,15 +62,25 @@ func (p *Player) SetCard(slot int, card Card) error {
 }
 
 func (p *Player) SwapCard(slot int, incoming Card) (Card, error) {
-	if slot < 0 || slot >= HandSize {
+	if slot < 0 {
 		return Card{}, fmt.Errorf("invalid slot %d", slot)
 	}
-	if p.Hand[slot] == nil {
+	in := incoming
+	if slot < HandSize {
+		if p.Hand[slot] == nil {
+			return Card{}, fmt.Errorf("no card in slot %d", slot)
+		}
+		old := *p.Hand[slot]
+		p.Hand[slot] = &in
+		p.Known[slot] = false
+		return old, nil
+	}
+	i := slot - HandSize
+	if i >= len(p.Extra) || p.Extra[i] == nil {
 		return Card{}, fmt.Errorf("no card in slot %d", slot)
 	}
-	old := *p.Hand[slot]
-	p.Hand[slot] = &incoming
-	p.Known[slot] = false
+	old := *p.Extra[i]
+	p.Extra[i] = &in
 	return old, nil
 }
 
@@ -86,5 +102,56 @@ func (p *Player) ActiveCardCount() int {
 			count++
 		}
 	}
+	count += len(p.Extra)
 	return count
+}
+
+func (p *Player) addPenaltyCard(c Card) {
+	for i := range p.Hand {
+		if p.Hand[i] == nil {
+			card := c
+			p.Hand[i] = &card
+			p.Known[i] = false
+			return
+		}
+	}
+	card := c
+	p.Extra = append(p.Extra, &card)
+}
+
+func (p *Player) cardAtSlot(slot int) (*Card, bool) {
+	if slot < 0 {
+		return nil, false
+	}
+	if slot < HandSize {
+		if p.Hand[slot] == nil {
+			return nil, false
+		}
+		return p.Hand[slot], true
+	}
+	i := slot - HandSize
+	if i >= len(p.Extra) || p.Extra[i] == nil {
+		return nil, false
+	}
+	return p.Extra[i], true
+}
+
+func (p *Player) clearCardAtSlot(slot int) bool {
+	if slot < 0 {
+		return false
+	}
+	if slot < HandSize {
+		if p.Hand[slot] == nil {
+			return false
+		}
+		p.Hand[slot] = nil
+		p.Known[slot] = false
+		return true
+	}
+	i := slot - HandSize
+	if i >= len(p.Extra) {
+		return false
+	}
+	p.Extra = append(p.Extra[:i], p.Extra[i+1:]...)
+	return true
 }

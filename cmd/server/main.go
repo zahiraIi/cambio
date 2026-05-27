@@ -11,10 +11,17 @@ import (
 )
 
 func main() {
-	port := flag.String("port", "8080", "server port")
+	port := flag.String("port", "", "server port (default PORT env or 8080)")
 	modelPath := flag.String("model", "", "path prefix for policy weights (default CAMBIO_MODEL_PATH or models/cambio)")
 	flag.Parse()
 
+	listenPort := *port
+	if listenPort == "" {
+		listenPort = os.Getenv("PORT")
+	}
+	if listenPort == "" {
+		listenPort = "8080"
+	}
 	path := *modelPath
 	if path == "" {
 		path = os.Getenv("CAMBIO_MODEL_PATH")
@@ -34,7 +41,7 @@ func main() {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	addr := ":" + *port
+	addr := ":" + listenPort
 	log.Printf("Cambio server starting on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
