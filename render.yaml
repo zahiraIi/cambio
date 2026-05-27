@@ -4,7 +4,7 @@ services:
   - type: web
     name: cambio
     runtime: docker
-    dockerfilePath: ./deploy/Dockerfile.server
+    dockerfilePath: ./Dockerfile
     dockerContext: .
     plan: free
     healthCheckPath: /api/games

@@ -1,0 +1,18 @@
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o cambio-server ./cmd/server
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget
+WORKDIR /app
+COPY --from=builder /app/cambio-server .
+COPY web/ ./web/
+COPY models/ ./models/
+
+EXPOSE 8080
+ENV CAMBIO_MODEL_PATH=/app/models/cambio
+CMD ["./cambio-server"]
