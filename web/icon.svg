@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cambio">
+  <rect width="512" height="512" rx="96" fill="#0c0f14"/>
+  <ellipse cx="256" cy="248" rx="200" ry="120" fill="#1a5c38"/>
+  <ellipse cx="256" cy="248" rx="176" ry="100" fill="#247a4a"/>
+  <rect x="196" y="168" width="120" height="168" rx="12" fill="#faf8f2" stroke="#3d2817" stroke-width="8"/>
+  <text x="256" y="272" text-anchor="middle" font-family="system-ui,sans-serif" font-size="72" font-weight="700" fill="#1a5c38">C</text>
+</svg>

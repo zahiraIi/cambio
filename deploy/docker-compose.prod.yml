@@ -1,0 +1,27 @@
+# Production stack on the EC2 host. Reads CAMBIO_IMAGE and CAMBIO_HOST from .env
+# next to this file (written by Terraform user_data, updated by the deploy workflow).
+services:
+  server:
+    image: ${CAMBIO_IMAGE}
+    restart: unless-stopped
+    environment:
+      CAMBIO_ALLOWED_ORIGINS: https://${CAMBIO_HOST}
+    stop_grace_period: 15s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CAMBIO_HOST: ${CAMBIO_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
